@@ -1,0 +1,388 @@
+#!/bin/sh
+
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
+# shellcheck source=lib/common.sh
+. "$LIB_DIR/common.sh"
+# shellcheck source=lib/platform.sh
+. "$LIB_DIR/platform.sh"
+# shellcheck source=lib/protocols.sh
+. "$LIB_DIR/protocols.sh"
+
+VERSION=3.0.0
+
+usage() {
+  cat <<'EOF'
+Usage: sb COMMAND [arguments]
+
+Node commands:
+  sb add <anytls|ss2022|vless-reality|socks5> [options]
+  sb change NAME [--listen-port PORT] [--public-address HOST] [--public-port PORT]
+  sb list
+  sb info NAME
+  sb url NAME
+  sb qr NAME
+  sb delete NAME [--yes]
+
+Service commands:
+  sb start | stop | restart | status | check | log
+
+Maintenance:
+  sb backup [ARCHIVE]
+  sb restore ARCHIVE
+  sb update
+  sb uninstall [--purge] [--remove-core] [--yes]
+
+NAT example:
+  sb add anytls --name tw --listen-port 30009 \
+    --public-address 23.134.212.11 --public-port 64491
+EOF
+}
+
+restart_and_verify() {
+  previous_active=0
+  service_active && previous_active=1 || true
+  if [ "$previous_active" -eq 1 ]; then service_restart; else service_enable; service_start; fi
+  service_active || return 1
+}
+
+commit_node_change() {
+  name=$1
+  staged_config=$2
+  staged_meta=$3
+  staged_cert_dir=${4:-}
+  operation=$5
+
+if [ "$operation" = delete ]; then candidate=$(build_candidate_dir "$name" ""); else candidate=$(build_candidate_dir "$name" "$staged_config"); fi
+  if [ -n "$staged_cert_dir" ] && [ -d "$staged_cert_dir" ]; then
+    jq --arg cert "$staged_cert_dir/cert.pem" --arg key "$staged_cert_dir/key.pem" \
+      '(.inbounds[0].tls.certificate_path)=$cert | (.inbounds[0].tls.key_path)=$key' \
+      "$candidate/$name.json" >"$candidate/$name.validate.json"
+    mv "$candidate/$name.validate.json" "$candidate/$name.json"
+  fi
+  validate_complete_config "$candidate"
+  backup=$(mktemp -d /tmp/sb-rollback.XXXXXX)
+  old_config=$(node_config_file "$name")
+  old_meta=$(node_meta_file "$name")
+  [ ! -f "$old_config" ] || cp "$old_config" "$backup/config.json"
+  [ ! -f "$old_meta" ] || cp "$old_meta" "$backup/meta.json"
+  [ ! -d "$SB_CERT_DIR/$name" ] || cp -R "$SB_CERT_DIR/$name" "$backup/certs"
+
+  if [ "$operation" = delete ]; then
+    rm -f "$old_config" "$old_meta"
+    rm -rf "$SB_CERT_DIR/$name"
+  else
+    install -m 0640 "$staged_config" "$old_config"
+    install -m 0600 "$staged_meta" "$old_meta"
+    if [ -n "$staged_cert_dir" ] && [ -d "$staged_cert_dir" ]; then
+      rm -rf "$SB_CERT_DIR/$name"
+      install -d -m 0750 "$SB_CERT_DIR/$name"
+      cp "$staged_cert_dir"/* "$SB_CERT_DIR/$name/"
+      chmod 0644 "$SB_CERT_DIR/$name/cert.pem"
+      chmod 0640 "$SB_CERT_DIR/$name/key.pem"
+    fi
+  fi
+
+  if getent group sing-box >/dev/null 2>&1; then
+    chown -R root:sing-box "$SB_CONF_DIR" "$SB_CERT_DIR"
+  fi
+
+  if ! restart_and_verify; then
+    rm -f "$old_config" "$old_meta"
+    rm -rf "$SB_CERT_DIR/$name"
+    [ ! -f "$backup/config.json" ] || cp "$backup/config.json" "$old_config"
+    [ ! -f "$backup/meta.json" ] || cp "$backup/meta.json" "$old_meta"
+    [ ! -d "$backup/certs" ] || cp -R "$backup/certs" "$SB_CERT_DIR/$name"
+    service_restart >/dev/null 2>&1 || true
+    rm -rf "$candidate" "$backup"
+    die 'service verification failed; previous node state restored'
+  fi
+  rm -rf "$candidate" "$backup"
+}
+
+command_add() {
+  [ "$#" -ge 1 ] || die 'protocol is required'
+  protocol=$1
+  shift
+  case "$protocol" in anytls|ss2022|vless-reality|socks5) ;; *) die 'unsupported protocol' ;; esac
+
+  name=
+  listen_address=0.0.0.0
+  listen_port=
+  public_address=$(manager_server_address)
+  public_port=
+  username=default
+  password=
+  ss_method=2022-blake3-aes-128-gcm
+  reality_server=www.microsoft.com
+  reality_port=443
+  cert_source=
+  key_source=
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --name) name=$2; shift 2 ;;
+      --listen-address|--listen) listen_address=$2; shift 2 ;;
+      --listen-port|--port) listen_port=$2; shift 2 ;;
+      --public-address|--server-address) public_address=$2; shift 2 ;;
+      --public-port) public_port=$2; shift 2 ;;
+      --username) username=$2; shift 2 ;;
+      --password) password=$2; shift 2 ;;
+      --ss-method) ss_method=$2; shift 2 ;;
+      --reality-server) reality_server=$2; shift 2 ;;
+      --reality-port) reality_port=$2; shift 2 ;;
+      --cert) cert_source=$2; shift 2 ;;
+      --key) key_source=$2; shift 2 ;;
+      *) die "unknown add option: $1" ;;
+    esac
+  done
+
+  [ -n "$listen_port" ] || listen_port=$(protocol_default_port "$protocol")
+  [ -n "$public_port" ] || public_port=$listen_port
+  [ -n "$name" ] || name="$protocol-$listen_port"
+  validate_name "$name" || die 'invalid node name'
+  validate_host "$public_address" || die 'invalid public address'
+  is_ipv4 "$listen_address" || die 'listen address must be IPv4'
+  validate_port "$listen_port" || die 'invalid listen port'
+  validate_port "$public_port" || die 'invalid public port'
+  validate_port "$reality_port" || die 'invalid REALITY port'
+  validate_host "$reality_server" || die 'invalid REALITY server'
+  node_exists "$name" && die "node already exists: $name"
+  port_in_metadata "$listen_port" '' && die "listen port already managed: $listen_port"
+
+  work=$(mktemp -d /tmp/sb-add.XXXXXX)
+  meta=$work/meta.json
+  config=$work/config.json
+  cert_stage=$work/certs
+  generate_node_metadata "$meta" "$protocol" "$name" "$listen_address" "$listen_port" \
+    "$public_address" "$public_port" "$username" "$password" "$ss_method" \
+    "$reality_server" "$reality_port" "$cert_source" "$key_source" "$cert_stage"
+  render_node_config "$meta" "$config"
+  commit_node_change "$name" "$config" "$meta" "$cert_stage" add
+  rm -rf "$work"
+  info "Node added: $name"
+  command_info "$name"
+}
+
+command_list() {
+  printf '%-24s %-16s %-18s %-18s\n' NAME PROTOCOL LISTEN PUBLIC
+  for name in $(list_node_names); do
+    meta=$(node_meta_file "$name")
+    printf '%-24s %-16s %-18s %-18s\n' \
+      "$name" "$(jq -r '.protocol' "$meta")" \
+      "$(jq -r '.listen.address+":"+(.listen.port|tostring)' "$meta")" \
+      "$(jq -r '.public.address+":"+(.public.port|tostring)' "$meta")"
+  done
+}
+
+command_info() {
+  [ "$#" -eq 1 ] || die 'node name is required'
+  name=$1
+  node_exists "$name" || die "node not found: $name"
+  meta=$(node_meta_file "$name")
+  jq . "$meta"
+  say 'Share URI:'
+  node_share_uri "$meta"
+}
+
+command_url() {
+  [ "$#" -eq 1 ] || die 'node name is required'
+  node_exists "$1" || die "node not found: $1"
+  node_share_uri "$(node_meta_file "$1")"
+}
+
+command_qr() {
+  url=$(command_url "$@")
+  if command -v qrencode >/dev/null 2>&1; then qrencode -t ANSIUTF8 "$url"; else say "$url"; warn 'qrencode is not installed'; fi
+}
+
+command_delete() {
+  [ "$#" -ge 1 ] || die 'node name is required'
+  name=$1
+  shift
+  yes=0
+  [ "${1:-}" != --yes ] || yes=1
+  node_exists "$name" || die "node not found: $name"
+  [ "$yes" -eq 1 ] || confirm "Delete node $name?" || return 0
+  empty=$(mktemp /tmp/sb-empty.XXXXXX)
+  : >"$empty"
+  commit_node_change "$name" "$empty" "$empty" '' delete
+  rm -f "$empty"
+  info "Node deleted: $name"
+}
+
+command_change() {
+  [ "$#" -ge 1 ] || die 'node name is required'
+  name=$1
+  shift
+  node_exists "$name" || die "node not found: $name"
+  source_meta=$(node_meta_file "$name")
+  listen_port=$(jq -r '.listen.port' "$source_meta")
+  public_address=$(jq -r '.public.address' "$source_meta")
+  public_port=$(jq -r '.public.port' "$source_meta")
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --listen-port|--port) listen_port=$2; shift 2 ;;
+      --public-address|--server-address) public_address=$2; shift 2 ;;
+      --public-port) public_port=$2; shift 2 ;;
+      *) die "unknown change option: $1" ;;
+    esac
+  done
+  validate_port "$listen_port" || die 'invalid listen port'
+  validate_port "$public_port" || die 'invalid public port'
+  validate_host "$public_address" || die 'invalid public address'
+  port_in_metadata "$listen_port" "$name" && die "listen port already managed: $listen_port"
+  work=$(mktemp -d /tmp/sb-change.XXXXXX)
+  jq --argjson listen_port "$listen_port" --arg public_address "$public_address" \
+    --argjson public_port "$public_port" --arg updated_at "$(timestamp)" \
+    '.listen.port=$listen_port | .public.address=$public_address | .public.port=$public_port | .updated_at=$updated_at' \
+    "$source_meta" >"$work/meta.json"
+  render_node_config "$work/meta.json" "$work/config.json"
+cert_stage=
+  protocol=$(jq -r '.protocol' "$source_meta")
+  old_public_address=$(jq -r '.public.address' "$source_meta")
+  tls_mode=$(jq -r '.tls.mode // empty' "$source_meta")
+  if [ "$protocol" = anytls ] && [ "$tls_mode" = self-signed ] && [ "$old_public_address" != "$public_address" ]; then
+    cert_stage="$work/certs"
+    install -d -m 0700 "$cert_stage"
+    if is_ipv4 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
+    openssl ecparam -genkey -name prime256v1 -out "$cert_stage/key.pem"
+    openssl req -new -x509 -key "$cert_stage/key.pem" -sha256 -days 3650 \
+      -out "$cert_stage/cert.pem" -subj "/CN=$public_address" -addext "subjectAltName=$san"
+    chmod 0640 "$cert_stage/key.pem"
+    chmod 0644 "$cert_stage/cert.pem"
+  fi
+  commit_node_change "$name" "$work/config.json" "$work/meta.json" "$cert_stage" change
+  rm -rf "$work"
+  info "Node changed: $name"
+  command_info "$name"
+}
+
+command_check() {
+  sing-box check -c "$SB_BASE_CONFIG" -C "$SB_CONF_DIR"
+}
+
+command_backup() {
+  archive=${1:-/root/sb-backup-$(timestamp).tar.gz}
+  case "$archive" in /*) ;; *) archive="$(pwd)/$archive" ;; esac
+  tar -C / -czf "$archive" "${SB_HOME#/}" "${SB_RUNTIME_DIR#/}" usr/local/bin/sb
+  chmod 0600 "$archive"
+  sha256sum "$archive" >"$archive.sha256"
+  chmod 0600 "$archive.sha256"
+  info "Backup created: $archive"
+}
+
+command_restore() {
+  [ "$#" -eq 1 ] || die 'backup archive is required'
+  archive=$1
+  [ -r "$archive" ] || die 'backup archive is not readable'
+  tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))' && die 'unsafe backup archive paths'
+  backup_before=/root/sb-before-restore-$(timestamp).tar.gz
+  command_backup "$backup_before"
+  tar -C / -xzf "$archive"
+  command_check || { warn "restore validation failed; restoring $backup_before"; tar -C / -xzf "$backup_before"; die 'restore failed'; }
+  restart_and_verify
+  info 'Backup restored.'
+}
+
+command_update() {
+  tmp=$(mktemp -d /tmp/sb-update.XXXXXX)
+  curl -fsSL https://github.com/Promiscuity1/sing-box-multi-protocol-installer/archive/refs/heads/main.tar.gz -o "$tmp/source.tar.gz"
+  tar -C "$tmp" -xzf "$tmp/source.tar.gz"
+  source_dir=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  sh "$source_dir/install.sh" --upgrade
+  rm -rf "$tmp"
+  info 'Manager updated.'
+}
+
+command_uninstall() {
+  purge=0
+  remove_core=0
+  yes=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in --purge) purge=1 ;; --remove-core) remove_core=1 ;; --yes) yes=1 ;; *) die "unknown uninstall option: $1" ;; esac
+    shift
+  done
+  [ "$yes" -eq 1 ] || confirm 'Uninstall sb manager?' || return 0
+  service_active && service_stop || true
+  service_enabled && service_disable || true
+  if [ "$SB_PLATFORM" = alpine ]; then rm -f /etc/init.d/sing-box; else rm -f /etc/systemd/system/sing-box.service; systemctl daemon-reload; fi
+  rm -f /usr/local/bin/sb
+  rm -rf "$SB_RUNTIME_DIR"
+  [ "$purge" -eq 0 ] || rm -rf "$SB_HOME"
+  if [ "$remove_core" -eq 1 ]; then
+    if [ "$SB_PLATFORM" = alpine ]; then apk del sing-box sing-box-openrc || true; else apt-get remove -y sing-box || true; fi
+  fi
+  info 'sb manager uninstalled.'
+}
+
+interactive_menu() {
+  while :; do
+    cat <<'EOF'
+
+sb manager
+1) Add node
+2) List nodes
+3) Node info
+4) Change node address/port
+5) Delete node
+6) Service status
+7) Restart service
+8) Backup
+9) Update
+0) Exit
+EOF
+    printf 'Select: '
+    read -r choice
+    case "$choice" in
+      1) printf 'Protocol (anytls/ss2022/vless-reality/socks5): '; read -r protocol; printf 'Name: '; read -r name; printf 'Listen port: '; read -r port; command_add "$protocol" --name "$name" --listen-port "$port" ;;
+      2) command_list ;;
+      3) printf 'Name: '; read -r name; command_info "$name" ;;
+      4) printf 'Name: '; read -r name; printf 'Public port: '; read -r port; command_change "$name" --public-port "$port" ;;
+      5) printf 'Name: '; read -r name; command_delete "$name" ;;
+      6) service_status ;;
+      7) service_restart ;;
+      8) command_backup ;;
+      9) command_update ;;
+      0) return 0 ;;
+      *) warn 'invalid selection' ;;
+    esac
+  done
+}
+
+require_root
+require_command jq
+require_command sing-box
+detect_platform
+acquire_lock
+
+[ "$#" -gt 0 ] || { interactive_menu; exit 0; }
+command=$1
+shift
+case "$command" in
+  add) command_add "$@" ;;
+  change) command_change "$@" ;;
+  list|ls) command_list ;;
+  info) command_info "$@" ;;
+  url) command_url "$@" ;;
+  qr) command_qr "$@" ;;
+  delete|del|rm) command_delete "$@" ;;
+  start) service_enable; service_start ;;
+  stop) service_stop ;;
+  restart) service_restart ;;
+  status) service_status ;;
+  check) command_check ;;
+  log|logs) service_logs "${1:-100}" ;;
+  backup) command_backup "$@" ;;
+  restore) command_restore "$@" ;;
+  update) command_update ;;
+  uninstall) command_uninstall "$@" ;;
+  help|-h|--help) usage ;;
+  version|--version) say "$VERSION" ;;
+  *) usage; die "unknown command: $command" ;;
+esac

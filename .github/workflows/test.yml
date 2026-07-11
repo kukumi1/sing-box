@@ -1,4 +1,4 @@
-name: Test installer
+name: Test sb manager
 
 on:
   push:
@@ -8,19 +8,16 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  syntax:
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
         image:
           - alpine:3.23
           - debian:bookworm-slim
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Validate installer
+      - name: Shell syntax and installer dry-run
         run: |
           docker run --rm \
             -v "$PWD:/work:ro" \
@@ -29,10 +26,23 @@ jobs:
             sh -c '
               set -eu
               sh -n install.sh
-              for protocol in anytls ss2022 vless-reality socks5; do
-                sh install.sh \
-                  --protocol "$protocol" \
-                  --server-address 203.0.113.10 \
-                  --dry-run
-              done
+              sh -n sb
+              for file in lib/*.sh tests/*.sh; do sh -n "$file"; done
+              sh install.sh --server-address 203.0.113.10 --dry-run
+            '
+
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate four concurrent node configurations
+        run: |
+          docker run --rm \
+            -v "$PWD:/work:ro" \
+            -w /work \
+            alpine:3.23 \
+            sh -c '
+              set -eu
+              apk add --no-cache sing-box jq openssl coreutils
+              sh tests/render.sh
             '
