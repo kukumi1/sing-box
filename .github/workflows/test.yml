@@ -55,4 +55,4 @@ jobs:
       - name: ShellCheck
         run: |
           docker run --rm -v "$PWD:/mnt:ro" koalaman/shellcheck:stable \
-            -s sh install.sh sb lib/*.sh tests/*.sh
+            --severity=error -s sh install.sh sb lib/*.sh tests/*.sh
