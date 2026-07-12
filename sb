@@ -19,7 +19,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/output.sh"
 . "$LIB_DIR/migrate.sh"
 
-VERSION=3.1.7
+VERSION=3.1.8
 
 usage() {
   cat <<'EOF'

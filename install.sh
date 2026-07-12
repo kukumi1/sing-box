@@ -186,7 +186,7 @@ install_sing_box_binary() {
 
 install_packages() {
   if [ "$PLATFORM" = alpine ]; then
-    apk add --no-cache jq openssl ca-certificates curl tar util-linux
+    apk add --no-cache jq openssl ca-certificates curl tar util-linux libqrencode-tools
     if apk add --no-cache sing-box; then
       return
     fi
@@ -196,7 +196,7 @@ install_packages() {
   fi
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl jq openssl tar util-linux iproute2
+  apt-get install -y --no-install-recommends ca-certificates curl jq openssl tar util-linux iproute2 qrencode
   install -d -m 0755 /etc/apt/keyrings
   curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
   chmod 0644 /etc/apt/keyrings/sagernet.asc
@@ -260,7 +260,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.1.7"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.1.8"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json

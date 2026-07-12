@@ -269,7 +269,7 @@ sb uninstall --purge --remove-core --yes
 ## 安全提示
 
 - `sb info` 默认隐藏密码、UUID 和私钥。
-- 只在私密终端中使用 `--show-secrets`。
+- 只在私密终端中使用 `--show-secrets`。`qrencode` 会随安装器自动安装，可在菜单中直接显示节点二维码。
 - SOCKS5 身份认证不会加密流量。
 - 正式部署优先使用可信证书，不建议长期使用 `insecure=1`。
 - 以 root 运行脚本前，应先检查脚本和 Release 校验值。
