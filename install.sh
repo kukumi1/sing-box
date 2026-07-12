@@ -47,7 +47,7 @@ bootstrap_if_needed() {
 
   bootstrap_root=$(mktemp -d /tmp/sb-bootstrap.XXXXXX)
   trap 'rm -rf "$bootstrap_root"' EXIT HUP INT TERM
-  bootstrap_base=https://github.com/kukumi1/sing-box-multi-protocol-installer/releases/latest/download
+  bootstrap_base=https://github.com/kukumi1/sing-box/releases/latest/download
 
   printf '==> Downloading the latest verified sb manager release\n'
   bootstrap_download "$bootstrap_base/sb-manager.tar.gz" "$bootstrap_root/sb-manager.tar.gz"

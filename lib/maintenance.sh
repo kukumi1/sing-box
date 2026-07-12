@@ -61,7 +61,7 @@ command_update() {
   case "$mu_kind" in
     manager)
       mu_work=$(mktemp -d /tmp/sb-manager-update.XXXXXX)
-      mu_api=https://api.github.com/repos/kukumi1/sing-box-multi-protocol-installer/releases/latest
+      mu_api=https://api.github.com/repos/kukumi1/sing-box/releases/latest
       curl -fsSL "$mu_api" -o "$mu_work/release.json"
       mu_archive_url=$(jq -r '.assets[] | select(.name=="sb-manager.tar.gz") | .browser_download_url' "$mu_work/release.json")
       mu_checksum_url=$(jq -r '.assets[] | select(.name=="sb-manager.tar.gz.sha256") | .browser_download_url' "$mu_work/release.json")

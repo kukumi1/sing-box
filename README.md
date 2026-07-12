@@ -31,7 +31,7 @@ HTTP 类传输可以使用 sing-box 原生 TLS 或 Caddy 自动 HTTPS。Hysteria
 推荐使用一键安装命令（需要 `bash` 和 `wget`）：
 
 ```sh
-bash <(wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box-multi-protocol-installer/main/install.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box/main/install.sh)
 ```
 
 脚本会自动检测 VPS 的公网 IPv4，并将其作为默认连接地址；直接回车即可采用，也可以输入其他 IP 或域名覆盖。随后脚本会下载最新 Release、验证 SHA-256 并执行完整安装。
@@ -40,26 +40,26 @@ Alpine 如果没有 Bash：
 
 ```sh
 apk add --no-cache bash wget ca-certificates
-bash <(wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box-multi-protocol-installer/main/install.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box/main/install.sh)
 ```
 
 也可以使用无需 Bash 的非交互方式：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box-multi-protocol-installer/main/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box/main/install.sh | sh
 ```
 
 使用 `curl`：
 
 ```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/kukumi1/sing-box-multi-protocol-installer/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/kukumi1/sing-box/main/install.sh)
 ```
 
 传统 Git 安装方式仍然可用：
 
 ```sh
-git clone https://github.com/kukumi1/sing-box-multi-protocol-installer.git
-cd sing-box-multi-protocol-installer
+git clone https://github.com/kukumi1/sing-box.git
+cd sing-box
 sh install.sh --server-address 你的公网IP或域名
 ```
 

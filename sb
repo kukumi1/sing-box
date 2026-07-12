@@ -325,7 +325,7 @@ command_restore() {
 
 command_update() {
   tmp=$(mktemp -d /tmp/sb-update.XXXXXX)
-  curl -fsSL https://github.com/kukumi1/sing-box-multi-protocol-installer/archive/refs/heads/main.tar.gz -o "$tmp/source.tar.gz"
+  curl -fsSL https://github.com/kukumi1/sing-box/archive/refs/heads/main.tar.gz -o "$tmp/source.tar.gz"
   tar -C "$tmp" -xzf "$tmp/source.tar.gz"
   source_dir=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)
   sh "$source_dir/install.sh" --upgrade
