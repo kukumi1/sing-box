@@ -13,6 +13,7 @@ jobs:
     strategy:
       matrix:
         image:
+          - alpine:3.21
           - alpine:3.23
           - debian:bookworm-slim
     steps:

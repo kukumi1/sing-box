@@ -6,9 +6,9 @@
 
 ## 支持系统
 
-- Alpine Linux 3.23+（OpenRC）
+- Alpine Linux 3.21+（OpenRC）
 - Debian、Ubuntu（systemd）
-- 官方 Alpine 或 SagerNet sing-box 软件包
+- 优先使用 Alpine 软件包；仓库缺失时自动安装经 SHA-256 校验的 SagerNet 官方二进制
 - sing-box 1.12.0 或更高版本
 
 ## 支持协议

@@ -107,9 +107,51 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
+install_sing_box_binary() {
+  case "$(uname -m)" in
+    x86_64) binary_arch=amd64 ;;
+    aarch64) binary_arch=arm64 ;;
+    armv7l|armv7) binary_arch=armv7 ;;
+    i386|i486|i586|i686) binary_arch=386 ;;
+    *) die "unsupported CPU architecture: $(uname -m)" ;;
+  esac
+
+  release_json=$(curl -fsSL --retry 3 --connect-timeout 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest)
+  release_tag=$(printf '%s' "$release_json" | jq -r '.tag_name // empty')
+  [ -n "$release_tag" ] || die 'cannot determine the latest sing-box release'
+  release_version=${release_tag#v}
+  archive_name=sing-box-${release_version}-linux-${binary_arch}.tar.gz
+  archive_url=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .browser_download_url')
+  expected_checksum=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://')
+  [ -n "$archive_url" ] || die "official release asset not found: $archive_name"
+  [ -n "$expected_checksum" ] || die 'official release asset has no SHA-256 digest'
+  binary_root=$(mktemp -d /tmp/sing-box-install.XXXXXX)
+
+  info "Downloading official sing-box ${release_version} for ${binary_arch}"
+  curl -fL --retry 3 --connect-timeout 15 "$archive_url" -o "$binary_root/$archive_name"
+  printf '%s  %s\n' "$expected_checksum" "$binary_root/$archive_name" | sha256sum -c - || {
+    rm -rf "$binary_root"
+    die 'sing-box archive checksum verification failed'
+  }
+
+  tar -xzf "$binary_root/$archive_name" -C "$binary_root"
+  binary_path=$(find "$binary_root" -type f -name sing-box | head -n 1)
+  [ -n "$binary_path" ] || {
+    rm -rf "$binary_root"
+    die 'sing-box binary was not found in the official archive'
+  }
+  install -m 0755 "$binary_path" /usr/bin/sing-box
+  rm -rf "$binary_root"
+}
+
 install_packages() {
   if [ "$PLATFORM" = alpine ]; then
-    apk add --no-cache sing-box sing-box-openrc jq openssl ca-certificates curl tar util-linux
+    apk add --no-cache jq openssl ca-certificates curl tar util-linux
+    if apk add --no-cache sing-box; then
+      return
+    fi
+    info 'The Alpine repository has no sing-box package; using the official verified binary'
+    install_sing_box_binary
     return
   fi
   export DEBIAN_FRONTEND=noninteractive
@@ -173,7 +215,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.1.0"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.1.1"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json
