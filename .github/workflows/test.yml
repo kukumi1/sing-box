@@ -52,6 +52,7 @@ jobs:
               sh tests/forward.sh
               sh tests/forward-socat.sh
               sh tests/interactive-socks.sh
+              sh tests/interactive-ss2022.sh
             '
 
   install-permissions:
