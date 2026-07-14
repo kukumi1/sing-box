@@ -20,7 +20,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/migrate.sh"
 . "$LIB_DIR/forward.sh"
 
-VERSION=3.3.4
+VERSION=3.3.5
 
 usage() {
   cat <<'EOF'
@@ -361,6 +361,32 @@ command_uninstall() {
   info 'sb 管理器已卸载'
 }
 
+interactive_select_ss2022_method() {
+  ss_menu_empty=$1
+  cat <<'EOF'
+
+请选择 SS2022 加密方式：
+1) 2022-blake3-aes-128-gcm（默认，16 字节密钥）
+2) 2022-blake3-aes-256-gcm（32 字节密钥）
+3) 2022-blake3-chacha20-poly1305（32 字节密钥）
+EOF
+  if [ "$ss_menu_empty" = keep ]; then
+    printf '请输入加密方式编号（留空则不修改）: '
+  else
+    printf '请输入加密方式编号（留空使用默认）: '
+  fi
+  read -r ss_menu_choice
+  case "$ss_menu_choice" in
+    '')
+      if [ "$ss_menu_empty" = keep ]; then menu_ss_method=; else menu_ss_method=2022-blake3-aes-128-gcm; fi
+      ;;
+    1) menu_ss_method=2022-blake3-aes-128-gcm ;;
+    2) menu_ss_method=2022-blake3-aes-256-gcm ;;
+    3) menu_ss_method=2022-blake3-chacha20-poly1305 ;;
+    *) warn '无效的 SS2022 加密方式编号'; return 1 ;;
+  esac
+}
+
 interactive_add_node() {
   cat <<'EOF'
 
@@ -402,6 +428,10 @@ EOF
   read -r menu_public_port
   menu_username=
   menu_password=
+  menu_ss_method=
+  if [ "$menu_protocol" = ss2022 ]; then
+    interactive_select_ss2022_method default || return 1
+  fi
   if [ "$menu_protocol" = socks5 ]; then
     printf 'SOCKS5 用户名（留空使用 default）: '
     read -r menu_username
@@ -416,6 +446,7 @@ EOF
   [ -z "$menu_public_port" ] || set -- "$@" --public-port "$menu_public_port"
   [ -z "$menu_username" ] || set -- "$@" --username "$menu_username"
   [ -z "$menu_password" ] || set -- "$@" --password "$menu_password"
+  [ -z "$menu_ss_method" ] || set -- "$@" --ss-method "$menu_ss_method"
   command_add "$@"
 }
 
@@ -587,15 +618,21 @@ EOF
         printf '新的公网端口（留空则不修改）: '; read -r port
         username=
         password=
+        ss_method=
         if [ "$protocol" = socks5 ]; then
           printf '新的 SOCKS5 用户名（留空则不修改）: '; read -r username
           printf '新的 SOCKS5 密码（留空则不修改）: '; read -r password
+        elif [ "$protocol" = ss2022 ]; then
+          say '切换 SS2022 加密方式会自动生成新的匹配密钥。'
+          interactive_select_ss2022_method keep || continue
+          ss_method=$menu_ss_method
         fi
         set -- "$name"
         [ -z "$address" ] || set -- "$@" --public-address "$address"
         [ -z "$port" ] || set -- "$@" --public-port "$port"
         [ -z "$username" ] || set -- "$@" --username "$username"
         [ -z "$password" ] || set -- "$@" --password "$password"
+        [ -z "$ss_method" ] || set -- "$@" --ss-method "$ss_method"
         command_change "$@"
         ;;
       7) if interactive_select_node; then command_enable "$menu_selected_node"; fi ;;
