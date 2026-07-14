@@ -49,6 +49,7 @@ jobs:
               sh tests/render-extended.sh
               sh tests/lock-fd.sh
               sh tests/forward.sh
+              sh tests/forward-socat.sh
             '
 
   install-permissions:

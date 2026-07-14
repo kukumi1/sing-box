@@ -5,6 +5,9 @@ SB_FORWARD_CHAIN_SNAT=SB_SNAT
 SB_FORWARD_CHAIN_FILTER=SB_FORWARD
 SB_FORWARD_SYNC_LOCK=${SB_FORWARD_SYNC_LOCK:-/run/lock/sb-forward-sync.lock}
 SB_FORWARD_SYSCTL_FILE=${SB_FORWARD_SYSCTL_FILE:-/etc/sysctl.d/99-sb-forward.conf}
+SB_FORWARD_BACKEND=${SB_FORWARD_BACKEND:-auto}
+SB_FORWARD_SYSTEMD_DIR=${SB_FORWARD_SYSTEMD_DIR:-/etc/systemd/system}
+SB_FORWARD_SOCAT_PREFIX=${SB_FORWARD_SOCAT_PREFIX:-sb-forward-socat-}
 
 forward_config_file() {
   printf '%s/%s.json\n' "$SB_FORWARD_DIR" "$1"
@@ -45,6 +48,172 @@ forward_port_conflicts() {
     jq -e --arg protocol "$fw_conflict_protocol" '.protocols | index($protocol) != null' "$fw_conflict_file" >/dev/null && return 0
   done
   return 1
+}
+
+forward_iptables_usable() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  command -v iptables-save >/dev/null 2>&1 || return 1
+  command -v iptables-restore >/dev/null 2>&1 || return 1
+  iptables-save >/dev/null 2>&1
+}
+
+forward_socat_usable() {
+  [ "$SB_PLATFORM" = systemd ] || return 1
+  command -v socat >/dev/null 2>&1 || return 1
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl show-environment >/dev/null 2>&1
+}
+
+forward_select_backend() {
+  case "$SB_FORWARD_BACKEND" in
+    iptables)
+      forward_iptables_usable || { warn 'iptables 后端不可用'; return 1; }
+      printf 'iptables\n'
+      ;;
+    socat)
+      forward_socat_usable || { warn 'socat 后端需要 systemd 正常运行且已安装 socat'; return 1; }
+      printf 'socat\n'
+      ;;
+    auto)
+      if forward_iptables_usable; then
+        printf 'iptables\n'
+        return 0
+      fi
+      fw_backend_error=$(mktemp /tmp/sb-forward-backend.XXXXXX) || return 1
+      iptables-save >/dev/null 2>"$fw_backend_error" || true
+      if grep -Eqi 'permission denied|operation not permitted|you must be root|could not fetch rule set generation id' "$fw_backend_error"; then
+        rm -f "$fw_backend_error"
+        forward_socat_usable || { warn '容器未授予 iptables 权限，且 socat/systemd 用户态中继不可用'; return 1; }
+        printf 'socat\n'
+        return 0
+      fi
+      if [ -s "$fw_backend_error" ]; then
+        fw_backend_message=$(tr '\n' ' ' <"$fw_backend_error")
+        warn "iptables 不可用: $fw_backend_message"
+      else
+        warn 'iptables 不可用'
+      fi
+      rm -f "$fw_backend_error"
+      return 1
+      ;;
+    *) warn '端口转发后端必须是 auto、iptables 或 socat'; return 1 ;;
+  esac
+}
+
+forward_socat_unit_name() {
+  fw_socat_unit_id=$(printf '%s' "$1:$2" | sha256sum | awk '{print substr($1, 1, 16)}')
+  printf '%s%s.service\n' "$SB_FORWARD_SOCAT_PREFIX" "$fw_socat_unit_id"
+}
+
+forward_socat_write_unit() {
+  fw_socat_config=$1
+  fw_socat_ip=$2
+  fw_socat_protocol=$3
+  fw_socat_output=$4
+  fw_socat_name=$(jq -r '.name' "$fw_socat_config")
+  fw_socat_listen=$(jq -r '.listen_port' "$fw_socat_config")
+  fw_socat_target=$(jq -r '.target.port' "$fw_socat_config")
+  case "$fw_socat_protocol" in
+    tcp) fw_socat_listen_address="TCP4-LISTEN:$fw_socat_listen,reuseaddr,fork"; fw_socat_target_address="TCP4:$fw_socat_ip:$fw_socat_target" ;;
+    udp) fw_socat_listen_address="UDP4-RECVFROM:$fw_socat_listen,reuseaddr,fork"; fw_socat_target_address="UDP4-SENDTO:$fw_socat_ip:$fw_socat_target" ;;
+    *) return 1 ;;
+  esac
+  cat >"$fw_socat_output" <<EOF
+[Unit]
+Description=sb socat $fw_socat_protocol relay $fw_socat_name
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat $fw_socat_listen_address $fw_socat_target_address
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+forward_socat_backup_units() {
+  fw_socat_backup_dir=$1/socat-backup
+  install -d -m 0700 "$fw_socat_backup_dir"
+  for fw_socat_existing in "$SB_FORWARD_SYSTEMD_DIR"/"$SB_FORWARD_SOCAT_PREFIX"*.service; do
+    [ -f "$fw_socat_existing" ] || continue
+    cp "$fw_socat_existing" "$fw_socat_backup_dir/${fw_socat_existing##*/}"
+  done
+}
+
+forward_socat_clear_all() {
+  [ "$SB_PLATFORM" = systemd ] || return 0
+  for fw_socat_existing in "$SB_FORWARD_SYSTEMD_DIR"/"$SB_FORWARD_SOCAT_PREFIX"*.service; do
+    [ -f "$fw_socat_existing" ] || continue
+    fw_socat_unit=${fw_socat_existing##*/}
+    systemctl disable --now "$fw_socat_unit" 8>&- 9>&- || true
+    rm -f "$fw_socat_existing"
+  done
+  systemctl daemon-reload 8>&- 9>&- || true
+}
+
+forward_socat_restore() {
+  fw_socat_work=$1
+  [ -d "$fw_socat_work/socat-backup" ] || return 0
+  forward_socat_clear_all
+  for fw_socat_backup in "$fw_socat_work/socat-backup"/*.service; do
+    [ -f "$fw_socat_backup" ] || continue
+    cp "$fw_socat_backup" "$SB_FORWARD_SYSTEMD_DIR/${fw_socat_backup##*/}"
+  done
+  systemctl daemon-reload || return 1
+  for fw_socat_backup in "$fw_socat_work/socat-backup"/*.service; do
+    [ -f "$fw_socat_backup" ] || continue
+    fw_socat_unit=${fw_socat_backup##*/}
+    systemctl enable "$fw_socat_unit" || return 1
+    systemctl restart "$fw_socat_unit" || return 1
+  done
+}
+
+forward_socat_reconcile_plan() {
+  fw_socat_plan=$1
+  fw_socat_work=$2
+  forward_socat_backup_units "$fw_socat_work" || return 1
+  fw_socat_desired=$fw_socat_work/socat-desired
+  install -d -m 0700 "$fw_socat_desired" || return 1
+  fw_socat_units=$fw_socat_work/socat-units
+  : >"$fw_socat_units" || return 1
+  while IFS='|' read -r fw_socat_config fw_socat_ip; do
+    [ -n "$fw_socat_config" ] || continue
+    fw_socat_name=$(jq -r '.name' "$fw_socat_config")
+    for fw_socat_protocol in $(jq -r '.protocols[]' "$fw_socat_config"); do
+      fw_socat_unit=$(forward_socat_unit_name "$fw_socat_name" "$fw_socat_protocol") || return 1
+      forward_socat_write_unit "$fw_socat_config" "$fw_socat_ip" "$fw_socat_protocol" "$fw_socat_desired/$fw_socat_unit" || return 1
+      if [ -f "$SB_FORWARD_SYSTEMD_DIR/$fw_socat_unit" ] && cmp -s "$fw_socat_desired/$fw_socat_unit" "$SB_FORWARD_SYSTEMD_DIR/$fw_socat_unit"; then
+        printf '%s|unchanged\n' "$fw_socat_unit" >>"$fw_socat_units"
+      else
+        install -m 0644 "$fw_socat_desired/$fw_socat_unit" "$SB_FORWARD_SYSTEMD_DIR/$fw_socat_unit" || return 1
+        printf '%s|changed\n' "$fw_socat_unit" >>"$fw_socat_units"
+      fi
+    done
+  done <"$fw_socat_plan"
+  systemctl daemon-reload || { forward_socat_restore "$fw_socat_work" || true; return 1; }
+  while IFS='|' read -r fw_socat_unit fw_socat_state; do
+    [ -n "$fw_socat_unit" ] || continue
+    if ! systemctl enable "$fw_socat_unit"; then forward_socat_restore "$fw_socat_work" || true; return 1; fi
+    if [ "$fw_socat_state" = changed ]; then
+      systemctl restart "$fw_socat_unit" || { forward_socat_restore "$fw_socat_work" || true; return 1; }
+    elif ! systemctl is-active --quiet "$fw_socat_unit"; then
+      systemctl start "$fw_socat_unit" || { forward_socat_restore "$fw_socat_work" || true; return 1; }
+    fi
+    systemctl is-active --quiet "$fw_socat_unit" || { forward_socat_restore "$fw_socat_work" || true; return 1; }
+  done <"$fw_socat_units"
+  for fw_socat_existing in "$SB_FORWARD_SYSTEMD_DIR"/"$SB_FORWARD_SOCAT_PREFIX"*.service; do
+    [ -f "$fw_socat_existing" ] || continue
+    fw_socat_unit=${fw_socat_existing##*/}
+    grep -Fq "$fw_socat_unit|" "$fw_socat_units" && continue
+    systemctl disable --now "$fw_socat_unit" || { forward_socat_restore "$fw_socat_work" || true; return 1; }
+    rm -f "$fw_socat_existing"
+  done
+  systemctl daemon-reload || { forward_socat_restore "$fw_socat_work" || true; return 1; }
 }
 
 forward_ensure_chains() {
@@ -161,12 +330,23 @@ forward_clear_rules() {
 }
 
 forward_require_sync_commands() {
-  require_command iptables
-  require_command iptables-save
-  require_command iptables-restore
-  require_command sysctl
+  fw_require_backend=$1
   require_command getent
   require_command flock
+  case "$fw_require_backend" in
+    iptables)
+      require_command iptables
+      require_command iptables-save
+      require_command iptables-restore
+      require_command sysctl
+      ;;
+    socat)
+      require_command socat
+      require_command sha256sum
+      require_command systemctl
+      ;;
+    *) die '未知的端口转发后端' ;;
+  esac
 }
 
 forward_acquire_sync_lock() {
@@ -184,6 +364,7 @@ forward_release_sync_lock() {
 
 forward_sync_locked() {
   fw_quiet=$1
+  fw_backend=$2
   install -d -m 0700 "$SB_FORWARD_DIR" || { warn '无法创建端口转发配置目录'; return 1; }
   fw_work=$(mktemp -d /tmp/sb-forward-sync.XXXXXX) || { warn '无法创建端口转发同步临时目录'; return 1; }
   fw_plan=$fw_work/plan
@@ -201,6 +382,34 @@ forward_sync_locked() {
     printf '%s|%s\n' "$fw_config" "$fw_ip" >>"$fw_plan" || { rm -rf "$fw_work"; warn '无法写入端口转发同步计划'; return 1; }
   done
 
+  if [ "$fw_backend" = socat ]; then
+    if ! forward_socat_reconcile_plan "$fw_plan" "$fw_work"; then
+      rm -rf "$fw_work"
+      warn '应用 socat 用户态中继失败，已恢复原服务状态'
+      return 1
+    fi
+    while IFS='|' read -r fw_config fw_ip; do
+      [ -n "$fw_config" ] || continue
+      if ! jq --arg ip "$fw_ip" --arg updated "$(timestamp)" '.resolved_ip=$ip | .updated_at=$updated' "$fw_config" >"$fw_config.tmp"; then
+        rm -f "$fw_config.tmp"
+        forward_socat_restore "$fw_work" || true
+        rm -rf "$fw_work"
+        warn '无法保存域名解析结果，已恢复原中继服务状态'
+        return 1
+      fi
+      if ! mv "$fw_config.tmp" "$fw_config"; then
+        rm -f "$fw_config.tmp"
+        forward_socat_restore "$fw_work" || true
+        rm -rf "$fw_work"
+        warn '无法更新端口转发配置，已恢复原中继服务状态'
+        return 1
+      fi
+    done <"$fw_plan"
+    rm -rf "$fw_work"
+    [ "$fw_quiet" -eq 1 ] || info '端口转发规则已同步（socat 用户态中继）'
+    return 0
+  fi
+
   fw_backup=$fw_work/iptables.save
   iptables-save >"$fw_backup" || { rm -rf "$fw_work"; warn '无法备份当前 iptables 规则'; return 1; }
   forward_enable_kernel || { rm -rf "$fw_work"; warn '无法启用 IPv4 转发'; return 1; }
@@ -210,6 +419,7 @@ forward_sync_locked() {
     warn '应用端口转发规则失败，已恢复原防火墙状态'
     return 1
   fi
+  forward_socat_clear_all
 
   while IFS='|' read -r fw_config fw_ip; do
     [ -n "$fw_config" ] || continue
@@ -234,7 +444,8 @@ forward_sync_locked() {
 }
 
 command_forward_sync() {
-  forward_require_sync_commands
+  fw_backend=$(forward_select_backend) || die '无法选择可用的端口转发后端'
+  forward_require_sync_commands "$fw_backend"
   fw_quiet=0
   [ "${1:-}" != --quiet ] || fw_quiet=1
   if ! forward_acquire_sync_lock; then
@@ -243,7 +454,7 @@ command_forward_sync() {
     return 1
   fi
   fw_sync_status=0
-  forward_sync_locked "$fw_quiet" || fw_sync_status=$?
+  forward_sync_locked "$fw_quiet" "$fw_backend" || fw_sync_status=$?
   forward_release_sync_lock
   return "$fw_sync_status"
 }
@@ -330,7 +541,8 @@ command_forward_change() {
     ' "$fw_change_file" >"$fw_change_candidate"
   chmod 0600 "$fw_change_candidate"
 
-  forward_require_sync_commands
+  fw_change_backend=$(forward_select_backend) || die '无法选择可用的端口转发后端'
+  forward_require_sync_commands "$fw_change_backend"
   if ! forward_acquire_sync_lock; then
     rm -f "$fw_change_candidate" "$fw_change_backup"
     die '另一个端口转发同步任务正在运行，请稍后重试'
@@ -342,7 +554,7 @@ command_forward_change() {
     return 1
   fi
 
-  if forward_sync_locked 0; then
+  if forward_sync_locked 0 "$fw_change_backend"; then
     rm -f "$fw_change_backup"
     forward_release_sync_lock
     info "端口转发已修改: $fw_change_name"
@@ -353,8 +565,8 @@ command_forward_change() {
   cp "$fw_change_backup" "$fw_change_restore"
   chmod 0600 "$fw_change_restore"
   mv "$fw_change_restore" "$fw_change_file"
-  if ! forward_sync_locked 1; then
-    warn '旧配置已恢复，但重新同步旧 iptables 规则失败，请立即运行 sb forward sync'
+  if ! forward_sync_locked 1 "$fw_change_backend"; then
+    warn '旧配置已恢复，但重新同步旧转发规则失败，请立即运行 sb forward sync'
   fi
   rm -f "$fw_change_backup"
   forward_release_sync_lock
@@ -398,10 +610,27 @@ command_forward_delete() {
 }
 
 command_forward_status() {
-  say 'IPv4 转发状态:'
-  sysctl net.ipv4.ip_forward
-  say 'DNAT 规则:'
-  iptables -t nat -L "$SB_FORWARD_CHAIN_DNAT" -n -v --line-numbers 2>/dev/null || say '尚未创建规则'
+  fw_status_backend=$(forward_select_backend) || { warn '无法检测端口转发后端'; return 1; }
+  say "转发后端: $fw_status_backend"
+  if [ "$fw_status_backend" = iptables ]; then
+    say 'IPv4 转发状态:'
+    sysctl net.ipv4.ip_forward
+    say 'DNAT 规则:'
+    iptables -t nat -L "$SB_FORWARD_CHAIN_DNAT" -n -v --line-numbers 2>/dev/null || say '尚未创建规则'
+    return 0
+  fi
+  say 'socat 用户态中继服务:'
+  for fw_status_name in $(forward_list_names); do
+    fw_status_file=$(forward_config_file "$fw_status_name")
+    for fw_status_protocol in $(jq -r '.protocols[]' "$fw_status_file"); do
+      fw_status_unit=$(forward_socat_unit_name "$fw_status_name" "$fw_status_protocol")
+      if systemctl is-active --quiet "$fw_status_unit"; then
+        say "$fw_status_name [$fw_status_protocol]: 运行中"
+      else
+        say "$fw_status_name [$fw_status_protocol]: 未运行"
+      fi
+    done
+  done
 }
 
 command_forward() {
@@ -422,5 +651,6 @@ command_forward() {
 
 forward_uninstall() {
   forward_remove_scheduler
+  forward_socat_clear_all
   forward_clear_rules
 }

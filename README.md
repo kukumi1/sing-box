@@ -208,12 +208,12 @@ sb dns
 
 管理器使用独立的 `sb-sing-box` 服务，不会覆盖发行版自带的 `sing-box` 服务文件。`sb doctor` 会检查系统和 sing-box 版本、服务与配置状态、节点监听和公网映射、TCP/UDP 要求、DNS 解析及防火墙规则。
 
-## iptables 动态端口转发
+## 动态端口转发
 
 进入中文菜单后选择：
 
 ```text
-17) iptables 动态端口转发
+17) 动态端口转发
 ```
 
 支持添加、查看、修改、启用、禁用、删除、立即同步和状态检查。目标可以是 IPv4 或动态解析域名；管理器每 5 分钟重新解析一次，IP 发生变化时自动重建受管规则。DNS 临时失败时继续使用上一次有效 IP。
@@ -245,10 +245,11 @@ sb forward delete game-forward
 
 实现约束：
 
-- `both` 表示同时转发 TCP 和 UDP。
+- oth 表示同时转发 TCP 和 UDP。
+- 默认使用 iptables；若 Debian/Ubuntu 容器未获 CAP_NET_ADMIN，会自动改用开机自启的 socat 用户态中继。
 - 使用独立的 `SB_DNAT`、`SB_SNAT`、`SB_FORWARD` 链，不清空其他防火墙规则。
-- 自动启用 `net.ipv4.ip_forward=1`，配置文件为 `/etc/sysctl.d/99-sb-forward.conf`。
-- Alpine 使用 OpenRC + crond；Debian/Ubuntu 使用 systemd timer。
+- iptables 后端自动启用 `net.ipv4.ip_forward=1`，配置文件为 `/etc/sysctl.d/99-sb-forward.conf`。
+- Alpine 使用 OpenRC + crond；Debian/Ubuntu 使用 systemd timer。socat 回退后端目前需要 Debian/Ubuntu 的 systemd。
 - 配置保存在 `/etc/sing-box/forwards/`，并包含在备份、恢复和快照中。
 - 本功能只管理服务器内部端口转发；服务商 NAT 面板中的公网端口映射仍需单独配置。
 ## BBR

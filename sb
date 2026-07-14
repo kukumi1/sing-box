@@ -20,7 +20,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/migrate.sh"
 . "$LIB_DIR/forward.sh"
 
-VERSION=3.3.1
+VERSION=3.3.2
 
 usage() {
   cat <<'EOF'
@@ -480,7 +480,7 @@ interactive_forward_menu() {
   while :; do
     cat <<'EOF'
 
-iptables 动态端口转发
+动态端口转发
 1) 添加转发规则
 2) 查看转发规则
 3) 修改转发规则
@@ -488,7 +488,7 @@ iptables 动态端口转发
 5) 禁用转发规则
 6) 删除转发规则
 7) 立即解析域名并同步
-8) 查看 iptables 规则状态
+8) 查看转发后端状态
 0) 返回主菜单
 EOF
     printf '请输入选项编号: '
@@ -558,7 +558,7 @@ sb 中文管理菜单
 14) 恢复备份
 15) 更新管理器
 16) 系统诊断
-17) iptables 动态端口转发
+17) 动态端口转发
 0) 退出
 EOF
     printf '请输入选项编号: '
