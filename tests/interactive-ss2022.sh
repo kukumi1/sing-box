@@ -37,7 +37,7 @@ meta=$TEST_HOME/nodes/interactive-ss2022.json
 old_key=$(jq -r '.credentials.password' "$meta")
 [ "$(printf '%s' "$old_key" | base64 -d | wc -c | tr -d ' ')" = 32 ]
 
-printf '%s\n' 6 1 '' '' 2 0 | run_menu >/dev/null
+printf '%s\n' 6 1 '' '' '' 2 0 | run_menu >/dev/null
 [ "$(jq -r '.credentials.method' "$meta")" = '2022-blake3-aes-256-gcm' ]
 new_key=$(jq -r '.credentials.password' "$meta")
 [ "$old_key" != "$new_key" ]

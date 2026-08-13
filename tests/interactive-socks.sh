@@ -36,10 +36,11 @@ meta=$TEST_HOME/nodes/interactive-socks.json
 [ "$(jq -r '.credentials.username' "$meta")" = 'custom user' ]
 [ "$(jq -r '.credentials.password' "$meta")" = 'pass:@ word' ]
 
-printf '%s\n' 6 1 '' '' 'changed user' 'changed:@ pass' 0 | run_menu >/dev/null
+printf '%s\n' 6 1 33111 '' '' 'changed user' 'changed:@ pass' 0 | run_menu >/dev/null
+[ "$(jq -r '.listen.port' "$meta")" = 33111 ]
 [ "$(jq -r '.credentials.username' "$meta")" = 'changed user' ]
 [ "$(jq -r '.credentials.password' "$meta")" = 'changed:@ pass' ]
-jq -e '.inbounds[0].users[0].username == "changed user" and .inbounds[0].users[0].password == "changed:@ pass"' "$TEST_HOME/conf.d/interactive-socks.json" >/dev/null
+jq -e '.inbounds[0].listen_port == 33111 and .inbounds[0].users[0].username == "changed user" and .inbounds[0].users[0].password == "changed:@ pass"' "$TEST_HOME/conf.d/interactive-socks.json" >/dev/null
 url=$(SB_HOME=$TEST_HOME SB_LIB_DIR=$TEST_LIB SB_LOCK_FILE=$TEST_ROOT/url.lock sh "$REPO_DIR/sb" url interactive-socks)
 [ "$url" = 'socks5://changed%20user:changed%3A%40%20pass@203.0.113.10:43101#interactive-socks' ]
 
