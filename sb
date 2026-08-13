@@ -20,7 +20,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/migrate.sh"
 . "$LIB_DIR/forward.sh"
 
-VERSION=3.3.8
+VERSION=3.3.9
 
 ui_interactive_terminal() {
   [ -t 0 ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]
@@ -115,7 +115,7 @@ ui_main_menu_view() {
   printf '  %s[1]%s 添加节点      %s[2]%s 节点列表      %s[3]%s 节点详情\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[4]%s 导入链接      %s[5]%s 节点二维码    %s[6]%s 修改节点\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[7]%s 启用节点      %s[8]%s 禁用节点      %s[9]%s 重置密钥\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
-  printf '  %s[10]%s 删除节点\n' "$UI_RED" "$UI_RESET"
+  printf '  %s[10]%s 删除节点      %s[18]%s 删除全部节点\n' "$UI_RED" "$UI_RESET" "$UI_RED" "$UI_RESET"
   ui_section 服务与维护
   printf '  %s[11]%s 服务状态      %s[12]%s 重启服务      %s[13]%s 创建备份\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[14]%s 恢复备份      %s[15]%s 更新管理器    %s[16]%s 系统诊断\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
@@ -132,6 +132,7 @@ ui_forward_menu_view() {
   printf '  %s[1]%s 添加规则      %s[2]%s 查看规则      %s[3]%s 修改规则\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[4]%s 启用规则      %s[5]%s 禁用规则      %s[6]%s 删除规则\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_RED" "$UI_RESET"
   printf '  %s[7]%s 解析并同步    %s[8]%s 后端状态\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
+  printf '  %s[9]%s 删除全部转发\n' "$UI_RED" "$UI_RESET"
   printf '\n%s  ─────────────────────────────────────────────%s\n' "$UI_MUTED" "$UI_RESET"
   printf '  %s[0]%s 返回主菜单\n\n' "$UI_YELLOW" "$UI_RESET"
 }
@@ -148,6 +149,7 @@ Node commands:
   sb url NAME
   sb qr NAME
   sb delete NAME [--yes]
+  sb delete-all [--yes]
 
 Service commands:
   sb start | stop | restart | status | check | log
@@ -163,6 +165,7 @@ Port forwarding:
   sb forward change NAME [--listen-port PORT] [--target-host HOST]
                          [--target-port PORT] [--protocol tcp|udp|both]
   sb forward list | sync | enable NAME | disable NAME | delete NAME
+  sb forward delete-all [--yes]
 
 NAT example:
   sb add anytls --name tw --listen-port 30009 \
@@ -367,6 +370,64 @@ command_delete() {
   commit_node_change "$name" "$empty" "$empty" '' delete
   rm -f "$empty"
   info "节点已删除: $name"
+}
+
+command_delete_all() {
+  delete_all_yes=0
+  case "${1:-}" in
+    --yes) delete_all_yes=1; shift ;;
+  esac
+  [ "$#" -eq 0 ] || die 'usage: sb delete-all [--yes]'
+
+  delete_all_names=$(list_node_names)
+  [ -n "$delete_all_names" ] || { info '没有可删除的节点'; return 0; }
+  delete_all_count=$(printf '%s\n' "$delete_all_names" | wc -l | tr -d '[:space:]')
+  [ "$delete_all_yes" -eq 1 ] || confirm "确定删除全部 $delete_all_count 个节点及其配置吗？" || return 0
+
+  delete_all_candidate=$(mktemp -d /tmp/sb-delete-all-candidate.XXXXXX)
+  for delete_all_config in "$SB_CONF_DIR"/*.json; do
+    [ -f "$delete_all_config" ] || continue
+    delete_all_config_name=${delete_all_config##*/}
+    delete_all_config_name=${delete_all_config_name%.json}
+    node_exists "$delete_all_config_name" && continue
+    cp "$delete_all_config" "$delete_all_candidate/$delete_all_config_name.json"
+  done
+  if ! validate_complete_config "$delete_all_candidate"; then
+    rm -rf "$delete_all_candidate"
+    die '删除全部节点后的配置校验失败'
+  fi
+  rm -rf "$delete_all_candidate"
+
+  delete_all_backup=$(mktemp -d /tmp/sb-delete-all.XXXXXX)
+  install -d -m 0700 "$delete_all_backup/conf.d" "$delete_all_backup/nodes" "$delete_all_backup/certs"
+  delete_all_previous_active=0
+  service_active && delete_all_previous_active=1 || true
+  for delete_all_name in $delete_all_names; do
+    [ ! -f "$(node_config_file "$delete_all_name")" ] || cp "$(node_config_file "$delete_all_name")" "$delete_all_backup/conf.d/$delete_all_name.json"
+    cp "$(node_meta_file "$delete_all_name")" "$delete_all_backup/nodes/$delete_all_name.json"
+    [ ! -d "$SB_CERT_DIR/$delete_all_name" ] || cp -R "$SB_CERT_DIR/$delete_all_name" "$delete_all_backup/certs/$delete_all_name"
+    rm -f "$(node_config_file "$delete_all_name")" "$(node_meta_file "$delete_all_name")"
+    rm -rf "$SB_CERT_DIR/$delete_all_name"
+  done
+
+  if caddy_sync && restart_and_verify; then
+    rm -rf "$delete_all_backup"
+    info "已删除全部 $delete_all_count 个节点"
+    return 0
+  fi
+
+  for delete_all_name in $delete_all_names; do
+    rm -f "$(node_config_file "$delete_all_name")" "$(node_meta_file "$delete_all_name")"
+    rm -rf "$SB_CERT_DIR/$delete_all_name"
+    [ ! -f "$delete_all_backup/conf.d/$delete_all_name.json" ] || cp "$delete_all_backup/conf.d/$delete_all_name.json" "$(node_config_file "$delete_all_name")"
+    cp "$delete_all_backup/nodes/$delete_all_name.json" "$(node_meta_file "$delete_all_name")"
+    [ ! -d "$delete_all_backup/certs/$delete_all_name" ] || cp -R "$delete_all_backup/certs/$delete_all_name" "$SB_CERT_DIR/$delete_all_name"
+  done
+  caddy_sync || true
+  if [ "$delete_all_previous_active" -eq 1 ]; then service_restart || true; else service_stop || true; fi
+  rm -rf "$delete_all_backup"
+  warn '删除全部节点失败，已恢复原节点配置'
+  return 1
 }
 
 command_change() {
@@ -634,7 +695,7 @@ interactive_select_forward() {
 interactive_forward_menu() {
   while :; do
     ui_forward_menu_view
-    printf '%s请选择操作 [0-8]: %s' "$UI_YELLOW" "$UI_RESET"
+    printf '%s请选择操作 [0-9]: %s' "$UI_YELLOW" "$UI_RESET"
     read -r forward_choice
     case "$forward_choice" in
       1)
@@ -674,6 +735,7 @@ interactive_forward_menu() {
       6) if interactive_select_forward && confirm "确定删除转发规则 $menu_selected_forward 吗？"; then command_forward delete "$menu_selected_forward"; fi ;;
       7) command_forward sync ;;
       8) command_forward status ;;
+      9) command_forward delete-all ;;
       0) return 0 ;;
       *) warn '无效的选项，请重新输入' ;;
     esac
@@ -684,7 +746,7 @@ interactive_forward_menu() {
 interactive_menu() {
   while :; do
     ui_main_menu_view
-    printf '%s请选择操作 [0-17]: %s' "$UI_YELLOW" "$UI_RESET"
+    printf '%s请选择操作 [0-18]: %s' "$UI_YELLOW" "$UI_RESET"
     read -r choice
     case "$choice" in
       1) interactive_add_node ;;
@@ -731,6 +793,7 @@ interactive_menu() {
       15) command_update manager ;;
       16) command_doctor ;;
       17) interactive_forward_menu; continue ;;
+      18) command_delete_all ;;
       0) return 0 ;;
       *) warn '无效的选项，请重新输入' ;;
     esac
@@ -777,6 +840,7 @@ case "$command" in
   url) command_url "$@" ;;
   qr) command_qr "$@" ;;
   delete|del|rm) command_delete "$@" ;;
+  delete-all|purge) command_delete_all "$@" ;;
   start) service_enable; service_start ;;
   stop) service_stop ;;
   restart) service_restart ;;

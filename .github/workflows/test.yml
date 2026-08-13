@@ -52,6 +52,7 @@ jobs:
               sh tests/lock-fd.sh
               sh tests/forward.sh
               sh tests/forward-socat.sh
+              sh tests/bulk-delete.sh
               sh tests/interactive-socks.sh
               sh tests/interactive-ss2022.sh
               sh tests/menu-layout.sh

@@ -108,6 +108,7 @@ sb enable 节点名           # 启用节点
 sb disable 节点名          # 禁用节点
 sb rotate 节点名           # 重新生成凭据
 sb delete 节点名 --yes      # 删除节点
+sb delete-all --yes         # 删除全部节点
 sb export --all            # 导出全部节点
 ```
 
@@ -216,7 +217,7 @@ sb dns
 17) 动态端口转发
 ```
 
-支持添加、查看、修改、启用、禁用、删除、立即同步和状态检查。目标可以是 IPv4 或动态解析域名；管理器每 5 分钟重新解析一次，IP 发生变化时自动重建受管规则。DNS 临时失败时继续使用上一次有效 IP。
+支持添加、查看、修改、启用、禁用、删除、删除全部、立即同步和状态检查。目标可以是 IPv4 或动态解析域名；管理器每 5 分钟重新解析一次，IP 发生变化时自动重建受管规则。DNS 临时失败时继续使用上一次有效 IP。
 
 现有规则可以直接修改本机端口、目标域名/IP、目标端口和协议，无需删除后重新创建。交互菜单选择“修改转发规则”后，留空的项目保持原值。
 
@@ -241,6 +242,7 @@ sb forward sync
 sb forward disable game-forward
 sb forward enable game-forward
 sb forward delete game-forward
+sb forward delete-all --yes
 ```
 
 实现约束：

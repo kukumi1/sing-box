@@ -609,6 +609,45 @@ command_forward_delete() {
   info "端口转发已删除: $fw_name"
 }
 
+command_forward_delete_all() {
+  fw_delete_all_yes=0
+  case "${1:-}" in
+    --yes) fw_delete_all_yes=1; shift ;;
+  esac
+  [ "$#" -eq 0 ] || die '用法: sb forward delete-all [--yes]'
+
+  fw_delete_all_names=$(forward_list_names)
+  [ -n "$fw_delete_all_names" ] || { info '没有可删除的端口转发规则'; return 0; }
+  fw_delete_all_count=$(printf '%s\n' "$fw_delete_all_names" | wc -l | tr -d '[:space:]')
+  [ "$fw_delete_all_yes" -eq 1 ] || confirm "确定删除全部 $fw_delete_all_count 条端口转发规则吗？" || return 0
+
+  fw_delete_all_backup=$(mktemp -d /tmp/sb-forward-delete-all.XXXXXX)
+  install -d -m 0700 "$fw_delete_all_backup/forwards"
+  for fw_delete_all_name in $fw_delete_all_names; do
+    cp "$(forward_config_file "$fw_delete_all_name")" "$fw_delete_all_backup/forwards/$fw_delete_all_name.json"
+    rm -f "$(forward_config_file "$fw_delete_all_name")"
+  done
+
+  if command_forward_sync; then
+    forward_remove_scheduler
+    rm -rf "$fw_delete_all_backup"
+    info "已删除全部 $fw_delete_all_count 条端口转发规则"
+    return 0
+  fi
+
+  rm -f "$SB_FORWARD_DIR"/*.json
+  for fw_delete_all_config in "$fw_delete_all_backup/forwards"/*.json; do
+    [ -f "$fw_delete_all_config" ] || continue
+    cp "$fw_delete_all_config" "$SB_FORWARD_DIR/${fw_delete_all_config##*/}"
+  done
+  if ! command_forward_sync; then
+    warn '旧规则已恢复，但重新同步旧端口转发失败，请立即运行 sb forward sync'
+  fi
+  rm -rf "$fw_delete_all_backup"
+  warn '删除全部端口转发失败，已恢复原转发规则'
+  return 1
+}
+
 command_forward_status() {
   fw_status_backend=$(forward_select_backend) || { warn '无法检测端口转发后端'; return 1; }
   say "转发后端: $fw_status_backend"
@@ -643,9 +682,10 @@ command_forward() {
     enable) [ "$#" -eq 1 ] || die '必须指定转发规则名称'; command_forward_set_enabled true "$1" ;;
     disable) [ "$#" -eq 1 ] || die '必须指定转发规则名称'; command_forward_set_enabled false "$1" ;;
     delete|del) command_forward_delete "$@" ;;
+    delete-all|purge) command_forward_delete_all "$@" ;;
     status) command_forward_status ;;
     install-scheduler) forward_install_scheduler ;;
-    *) die '用法: sb forward add|change|list|sync|enable|disable|delete|status' ;;
+    *) die '用法: sb forward add|change|list|sync|enable|disable|delete|delete-all|status' ;;
   esac
 }
 

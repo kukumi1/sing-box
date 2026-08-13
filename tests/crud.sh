@@ -77,5 +77,14 @@ run_sb delete first-node --yes >/dev/null
 [ -f "$TEST_HOME/nodes/second-node.json" ]
 [ -f "$TEST_HOME/nodes/anytls-node.json" ]
 
+printf 'n\n' | run_sb delete-all >/dev/null
+[ -f "$TEST_HOME/nodes/second-node.json" ]
+[ -f "$TEST_HOME/nodes/anytls-node.json" ]
+run_sb delete-all --yes >/dev/null
+[ ! -f "$TEST_HOME/nodes/second-node.json" ]
+[ ! -f "$TEST_HOME/nodes/anytls-node.json" ]
+[ ! -f "$TEST_HOME/conf.d/second-node.json" ]
+[ ! -f "$TEST_HOME/conf.d/anytls-node.json" ]
+
 sing-box check -c "$TEST_HOME/config.json" -C "$TEST_HOME/conf.d"
 printf 'CRUD integration test passed.\n'

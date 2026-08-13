@@ -158,8 +158,14 @@ fi
 FW_DNS_IP=203.0.113.44 run_sb forward enable dynamic-test >/dev/null
 [ "$(jq -r '.enabled' "$config")" = true ]
 run_sb forward list | grep -Fq 'disabled.example:34000'
-run_sb forward delete tcp-conflict >/dev/null
-run_sb forward delete dynamic-test >/dev/null
+printf 'n\n' | run_sb forward delete-all >/dev/null
+[ -f "$SB_HOME/forwards/tcp-conflict.json" ]
+[ -f "$config" ]
+run_sb forward delete-all --yes >/dev/null
+[ ! -f "$SB_HOME/forwards/tcp-conflict.json" ]
 [ ! -f "$config" ]
+grep -Fq -- '-F SB_DNAT' "$FW_LOG"
+grep -Fq -- '-F SB_SNAT' "$FW_LOG"
+grep -Fq -- '-F SB_FORWARD' "$FW_LOG"
 
 printf 'Dynamic forwarding integration test passed.\n'
