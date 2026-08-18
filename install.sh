@@ -229,11 +229,7 @@ migrate_legacy_base_config() {
 
   [ -f "$config_path" ] || return 0
 
-  if ! jq -e '
-    (.dns.servers? == [{"address":"tls://8.8.8.8"}]) and
-    (.outbounds? == [{"type":"direct"},{"type":"dns","tag":"dns-out"}]) and
-    (.route.rules? == [{"port":53,"outbound":"dns-out"}])
-  ' "$config_path" >/dev/null; then
+  if ! jq -e -f "$SOURCE_DIR/lib/sing-box-1.12-managed-base-legacy.jq" "$config_path" >/dev/null; then
     return 0
   fi
 
@@ -241,12 +237,12 @@ migrate_legacy_base_config() {
   cp -p "$config_path" "$migration_backup"
   chmod 0600 "$migration_backup"
 
-  info 'Migrating the legacy sing-box DNS and outbound configuration'
+  info 'Migrating the managed legacy sing-box DNS and special outbound configuration'
   jq -f "$SOURCE_DIR/lib/sing-box-1.12-migration.jq" "$config_path" >"$config_path.tmp"
   chmod 0640 "$config_path.tmp"
   mv "$config_path.tmp" "$config_path"
 
-  if ! /usr/bin/sing-box check -c "$config_path" -C /etc/sing-box/conf.d >/dev/null 2>&1; then
+  if ! /usr/bin/sing-box check -c "$config_path" >/dev/null 2>&1; then
     cp -p "$migration_backup" "$config_path"
     die "the sing-box 1.12 configuration migration failed; restored $migration_backup"
   fi
@@ -299,7 +295,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.3.9"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.3.10"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json
