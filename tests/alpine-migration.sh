@@ -25,13 +25,19 @@ jq -n '
   }
 ' >"$TEST_ROOT/managed-base.json"
 jq -e -f "$REPO_DIR/lib/sing-box-1.12-managed-base-legacy.jq" "$TEST_ROOT/managed-base.json" >/dev/null
-
-jq -f "$REPO_DIR/lib/sing-box-1.12-migration.jq" "$TEST_ROOT/legacy.json" >"$TEST_ROOT/migrated.json"
-
+jq -f "$REPO_DIR/lib/sing-box-1.12-migration.jq" "$TEST_ROOT/managed-base.json" >"$TEST_ROOT/managed-base-migrated.json"
 jq -e '
   .dns.servers == [{"type":"tls","tag":"google-dns","server":"8.8.8.8","server_port":853}] and
   (.route.rules == [{"port":53,"action":"hijack-dns"}]) and
-  (has("outbounds") | not) and
+  (has("outbounds") | not)
+' "$TEST_ROOT/managed-base-migrated.json" >/dev/null
+
+jq -f "$REPO_DIR/lib/sing-box-1.11-special-outbound-migration.jq" "$TEST_ROOT/legacy.json" >"$TEST_ROOT/migrated.json"
+
+jq -e '
+  .dns.servers == [{"address":"tls://8.8.8.8"}] and
+  (.outbounds == [{"type":"direct"}]) and
+  (.route.rules == [{"port":53,"action":"hijack-dns"}]) and
   (.inbounds[0].type == "shadowsocks") and
   (.inbounds[0].password == "test-secret")
 ' "$TEST_ROOT/migrated.json" >/dev/null
