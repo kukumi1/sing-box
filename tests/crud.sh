@@ -35,6 +35,8 @@ run_sb() {
 run_sb add ss2022 --name first-node --listen-port 33001 --public-port 43001 >/dev/null
 run_sb add socks5 --name second-node --listen-port 33002 --public-port 43002 >/dev/null
 run_sb add anytls --name anytls-node --listen-port 33003 --public-port 43003 --password test-anytls-password >/dev/null
+run_sb add vless-reality --name reality-default --listen-port 33004 --public-port 43004 >/dev/null
+run_sb add anytls --name anytls-sni --listen-port 33005 --public-port 43005 --tls-sni developer.apple.com >/dev/null
 
 anytls_url=$(run_sb url anytls-node)
 [ "$anytls_url" = 'anytls://test-anytls-password@203.0.113.10:43003?insecure=1&fp=chrome#anytls-node' ]
@@ -46,13 +48,23 @@ printf '%s\n' "$menu_output" | grep -Fq '1) anytls-node  [anytls]  203.0.113.10:
 [ -f "$TEST_HOME/nodes/first-node.json" ]
 [ -f "$TEST_HOME/nodes/second-node.json" ]
 [ -f "$TEST_HOME/nodes/anytls-node.json" ]
+[ -f "$TEST_HOME/nodes/reality-default.json" ]
+[ -f "$TEST_HOME/nodes/anytls-sni.json" ]
 [ -f "$TEST_HOME/conf.d/first-node.json" ]
 [ -f "$TEST_HOME/conf.d/second-node.json" ]
 [ -f "$TEST_HOME/conf.d/anytls-node.json" ]
+[ -f "$TEST_HOME/conf.d/reality-default.json" ]
+[ -f "$TEST_HOME/conf.d/anytls-sni.json" ]
 
 run_sb list | grep -q first-node
 run_sb list | grep -q second-node
 run_sb list | grep -q anytls-node
+run_sb list | grep -q reality-default
+[ "$(jq -r '.tls.server_name' "$TEST_HOME/nodes/anytls-sni.json")" = developer.apple.com ]
+run_sb url anytls-sni | grep -Fq 'sni=developer.apple.com'
+run_sb client anytls-sni | jq -e '.tls.server_name == "developer.apple.com"' >/dev/null
+[ "$(jq -r '.reality.server' "$TEST_HOME/nodes/reality-default.json")" = developer.apple.com ]
+run_sb url reality-default | grep -Fq 'sni=developer.apple.com'
 
 run_sb disable first-node >/dev/null
 [ "$(jq -r '.enabled' "$TEST_HOME/nodes/first-node.json")" = false ]
@@ -70,12 +82,14 @@ new_password=$(jq -r '.credentials.password' "$TEST_HOME/nodes/second-node.json"
 run_sb change second-node --public-port 44002 >/dev/null
 run_sb url second-node | grep -q ':44002'
 
-run_sb export --all --format json | jq -e '.nodes | length == 3' >/dev/null
+run_sb export --all --format json | jq -e '.nodes | length == 5' >/dev/null
 
 run_sb delete first-node --yes >/dev/null
 [ ! -f "$TEST_HOME/nodes/first-node.json" ]
 [ -f "$TEST_HOME/nodes/second-node.json" ]
 [ -f "$TEST_HOME/nodes/anytls-node.json" ]
+[ -f "$TEST_HOME/nodes/reality-default.json" ]
+[ -f "$TEST_HOME/nodes/anytls-sni.json" ]
 
 printf 'n\n' | run_sb delete-all >/dev/null
 [ -f "$TEST_HOME/nodes/second-node.json" ]
@@ -83,8 +97,12 @@ printf 'n\n' | run_sb delete-all >/dev/null
 run_sb delete-all --yes >/dev/null
 [ ! -f "$TEST_HOME/nodes/second-node.json" ]
 [ ! -f "$TEST_HOME/nodes/anytls-node.json" ]
+[ ! -f "$TEST_HOME/nodes/reality-default.json" ]
+[ ! -f "$TEST_HOME/nodes/anytls-sni.json" ]
 [ ! -f "$TEST_HOME/conf.d/second-node.json" ]
 [ ! -f "$TEST_HOME/conf.d/anytls-node.json" ]
+[ ! -f "$TEST_HOME/conf.d/reality-default.json" ]
+[ ! -f "$TEST_HOME/conf.d/anytls-sni.json" ]
 
 sing-box check -c "$TEST_HOME/config.json" -C "$TEST_HOME/conf.d"
 printf 'CRUD integration test passed.\n'

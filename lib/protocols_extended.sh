@@ -33,26 +33,27 @@ generate_tls_assets() {
 protocol_generate() {
   output=$1; protocol=$2; name=$3; listen_address=$4; listen_port=$5; public_address=$6; public_port=$7
   username=$8; password=$9; shift 9
-  ss_method=${1:-2022-blake3-aes-128-gcm}; reality_server=${2:-www.microsoft.com}; reality_port=${3:-443}
-  cert_source=${4:-}; key_source=${5:-}; cert_stage=${6:-}; transport=${7:-tcp}; path=${8:-/proxy}
-  host=${9:-$public_address}; shift 9
+  ss_method=${1:-2022-blake3-aes-128-gcm}; reality_server=${2:-developer.apple.com}; reality_port=${3:-443}; tls_server_name=${4:-$public_address}
+  cert_source=${5:-}; key_source=${6:-}; cert_stage=${7:-}; transport=${8:-tcp}; path=${9:-/proxy}
+  host=${10:-$public_address}; shift 10
   tls_mode=${1:-}; acme_email=${2:-}; obfs_password=${3:-}
 
 if [ "$protocol" = anytls ] && [ "$tls_mode" = acme ]; then
     is_ipv4 "$public_address" && die 'AnyTLS ACME requires a DNS name'
     [ -n "$acme_email" ] || die '--acme-email is required for AnyTLS ACME'
+    [ "$tls_server_name" = "$public_address" ] || die '--tls-sni must match the AnyTLS ACME domain'
     [ -n "$password" ] || password=$(openssl rand -hex 24)
     created_at=$(timestamp)
     jq -n --arg name "$name" --arg protocol "$protocol" --arg listen_address "$listen_address" --argjson listen_port "$listen_port" \
       --arg public_address "$public_address" --argjson public_port "$public_port" --arg username "$username" --arg password "$password" \
-      --arg email "$acme_email" --arg created_at "$created_at" \
-      '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["tcp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:"acme",insecure:false,domain:$public_address,email:$email},created_at:$created_at,updated_at:$created_at}' >"$output"
+      --arg email "$acme_email" --arg tls_server_name "$tls_server_name" --arg created_at "$created_at" \
+      '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["tcp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:"acme",insecure:false,domain:$public_address,email:$email,server_name:$tls_server_name},created_at:$created_at,updated_at:$created_at}' >"$output"
     return
   fi
 
   if ! extended_protocol "$protocol"; then
     generate_node_metadata "$output" "$protocol" "$name" "$listen_address" "$listen_port" "$public_address" "$public_port" \
-      "$username" "$password" "$ss_method" "$reality_server" "$reality_port" "$cert_source" "$key_source" "$cert_stage"
+      "$username" "$password" "$ss_method" "$reality_server" "$reality_port" "$tls_server_name" "$cert_source" "$key_source" "$cert_stage"
     return
   fi
 
@@ -65,8 +66,8 @@ if [ "$protocol" = anytls ] && [ "$tls_mode" = acme ]; then
       [ -n "$obfs_password" ] || obfs_password=$(openssl rand -hex 16)
       jq -n --arg name "$name" --arg protocol "$protocol" --arg listen_address "$listen_address" --argjson listen_port "$listen_port" \
         --arg public_address "$public_address" --argjson public_port "$public_port" --arg username "$username" --arg password "$password" \
-        --arg tls_mode "$tls_mode" --arg obfs_password "$obfs_password" --arg created_at "$created_at" \
-        '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["udp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:$tls_mode,insecure:($tls_mode=="self-signed")},obfs:{type:"salamander",password:$obfs_password},created_at:$created_at,updated_at:$created_at}' >"$output"
+      --arg tls_mode "$tls_mode" --arg tls_server_name "$tls_server_name" --arg obfs_password "$obfs_password" --arg created_at "$created_at" \
+        '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["udp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:$tls_mode,insecure:($tls_mode=="self-signed"),server_name:$tls_server_name},obfs:{type:"salamander",password:$obfs_password},created_at:$created_at,updated_at:$created_at}' >"$output"
       ;;
     tuic)
       uuid=$(sing-box generate uuid)
@@ -75,8 +76,8 @@ if [ "$protocol" = anytls ] && [ "$tls_mode" = acme ]; then
       case "$tls_mode" in self-signed|trusted) tls_mode=$(generate_tls_assets "$cert_stage" "$public_address" "$cert_source" "$key_source") ;; *) die 'TUIC tls-mode must be self-signed or trusted' ;; esac
       jq -n --arg name "$name" --arg protocol "$protocol" --arg listen_address "$listen_address" --argjson listen_port "$listen_port" \
         --arg public_address "$public_address" --argjson public_port "$public_port" --arg username "$username" --arg uuid "$uuid" --arg password "$password" \
-        --arg tls_mode "$tls_mode" --arg created_at "$created_at" \
-        '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["udp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,uuid:$uuid,password:$password},tls:{mode:$tls_mode,insecure:($tls_mode=="self-signed")},tuic:{congestion_control:"cubic",zero_rtt:false},created_at:$created_at,updated_at:$created_at}' >"$output"
+      --arg tls_mode "$tls_mode" --arg tls_server_name "$tls_server_name" --arg created_at "$created_at" \
+        '{schema:1,name:$name,protocol:$protocol,enabled:true,listen:{address:$listen_address,port:$listen_port,transports:["udp"]},public:{address:$public_address,port:$public_port},credentials:{username:$username,uuid:$uuid,password:$password},tls:{mode:$tls_mode,insecure:($tls_mode=="self-signed"),server_name:$tls_server_name},tuic:{congestion_control:"cubic",zero_rtt:false},created_at:$created_at,updated_at:$created_at}' >"$output"
       ;;
     trojan|vless-tls|vmess)
       case "$transport" in tcp|ws|http|h2|httpupgrade|quic) ;; *) die 'unsupported transport' ;; esac
@@ -180,16 +181,17 @@ protocol_share_uri() {
   name=$(jq -r '.name' "$meta"); address=$(jq -r '.public.address' "$meta"); port=$(jq -r '.public.port' "$meta")
   encoded_name=$(uri_encode "$name")
   insecure=$(jq -r 'if .tls.insecure then 1 else 0 end' "$meta")
+  tls_server_name=$(jq -r '.tls.server_name // .public.address' "$meta")
   case "$protocol" in
     hysteria2)
       password=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
       obfs=$(uri_encode "$(jq -r '.obfs.password' "$meta")")
-      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s&obfs=salamander&obfs-password=%s#%s\n' "$password" "$address" "$port" "$(uri_encode "$address")" "$insecure" "$obfs" "$encoded_name"
+      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s&obfs=salamander&obfs-password=%s#%s\n' "$password" "$address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$obfs" "$encoded_name"
       ;;
     tuic)
       uuid=$(jq -r '.credentials.uuid' "$meta")
       password=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
-      printf 'tuic://%s:%s@%s:%s?congestion_control=cubic&udp_relay_mode=native&sni=%s&allow_insecure=%s#%s\n' "$uuid" "$password" "$address" "$port" "$(uri_encode "$address")" "$insecure" "$encoded_name"
+      printf 'tuic://%s:%s@%s:%s?congestion_control=cubic&udp_relay_mode=native&sni=%s&allow_insecure=%s#%s\n' "$uuid" "$password" "$address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$encoded_name"
       ;;
     trojan|vless-tls|vmess)
       transport=$(jq -r '.transport.type' "$meta"); path=$(jq -r '.transport.path' "$meta"); host=$(jq -r '.transport.host' "$meta"); tls_mode=$(jq -r '.tls.mode' "$meta")

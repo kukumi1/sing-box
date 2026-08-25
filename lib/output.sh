@@ -7,9 +7,9 @@ protocol_client_json() {
   po_port=$(jq -r '.public.port' "$po_meta")
   case "$po_protocol" in
     anytls)
-      po_password=$(jq -r '.credentials.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta")
-      jq -n --arg server "$po_address" --argjson port "$po_port" --arg password "$po_password" --argjson insecure "$po_insecure" \
-        '{type:"anytls",tag:"proxy",server:$server,server_port:$port,password:$password,tls:{enabled:true,server_name:$server,insecure:$insecure}}'
+      po_password=$(jq -r '.credentials.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta"); po_sni=$(jq -r '.tls.server_name // .public.address' "$po_meta")
+      jq -n --arg server "$po_address" --argjson port "$po_port" --arg password "$po_password" --arg sni "$po_sni" --argjson insecure "$po_insecure" \
+        '{type:"anytls",tag:"proxy",server:$server,server_port:$port,password:$password,tls:{enabled:true,server_name:$sni,insecure:$insecure}}'
       ;;
     ss2022)
       po_method=$(jq -r '.credentials.method' "$po_meta"); po_password=$(jq -r '.credentials.password' "$po_meta")
@@ -27,14 +27,14 @@ protocol_client_json() {
         '{type:"vless",tag:"proxy",server:$server,server_port:$port,uuid:$uuid,flow:"xtls-rprx-vision",tls:{enabled:true,server_name:$sni,reality:{enabled:true,public_key:$public,short_id:$short}}}'
       ;;
     hysteria2)
-      po_password=$(jq -r '.credentials.password' "$po_meta"); po_obfs=$(jq -r '.obfs.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta")
-      jq -n --arg server "$po_address" --argjson port "$po_port" --arg password "$po_password" --arg obfs "$po_obfs" --argjson insecure "$po_insecure" \
-        '{type:"hysteria2",tag:"proxy",server:$server,server_port:$port,password:$password,obfs:{type:"salamander",password:$obfs},tls:{enabled:true,server_name:$server,insecure:$insecure}}'
+      po_password=$(jq -r '.credentials.password' "$po_meta"); po_obfs=$(jq -r '.obfs.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta"); po_sni=$(jq -r '.tls.server_name // .public.address' "$po_meta")
+      jq -n --arg server "$po_address" --argjson port "$po_port" --arg password "$po_password" --arg obfs "$po_obfs" --arg sni "$po_sni" --argjson insecure "$po_insecure" \
+        '{type:"hysteria2",tag:"proxy",server:$server,server_port:$port,password:$password,obfs:{type:"salamander",password:$obfs},tls:{enabled:true,server_name:$sni,insecure:$insecure}}'
       ;;
     tuic)
-      po_uuid=$(jq -r '.credentials.uuid' "$po_meta"); po_password=$(jq -r '.credentials.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta")
-      jq -n --arg server "$po_address" --argjson port "$po_port" --arg uuid "$po_uuid" --arg password "$po_password" --argjson insecure "$po_insecure" \
-        '{type:"tuic",tag:"proxy",server:$server,server_port:$port,uuid:$uuid,password:$password,congestion_control:"cubic",udp_relay_mode:"native",zero_rtt_handshake:false,tls:{enabled:true,server_name:$server,insecure:$insecure}}'
+      po_uuid=$(jq -r '.credentials.uuid' "$po_meta"); po_password=$(jq -r '.credentials.password' "$po_meta"); po_insecure=$(jq -r '.tls.insecure' "$po_meta"); po_sni=$(jq -r '.tls.server_name // .public.address' "$po_meta")
+      jq -n --arg server "$po_address" --argjson port "$po_port" --arg uuid "$po_uuid" --arg password "$po_password" --arg sni "$po_sni" --argjson insecure "$po_insecure" \
+        '{type:"tuic",tag:"proxy",server:$server,server_port:$port,uuid:$uuid,password:$password,congestion_control:"cubic",udp_relay_mode:"native",zero_rtt_handshake:false,tls:{enabled:true,server_name:$sni,insecure:$insecure}}'
       ;;
     trojan|vless-tls|vmess)
       po_transport=$(transport_json "$po_meta"); po_tls_mode=$(jq -r '.tls.mode' "$po_meta"); po_tls=null

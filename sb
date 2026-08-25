@@ -20,7 +20,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/migrate.sh"
 . "$LIB_DIR/forward.sh"
 
-VERSION=3.3.11
+VERSION=3.3.12
 
 ui_interactive_terminal() {
   [ -t 0 ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]
@@ -143,7 +143,7 @@ Usage: sb COMMAND [arguments]
 
 Node commands:
   sb add <anytls|ss2022|vless-reality|socks5> [options]
-  sb change NAME [--listen-port PORT] [--public-address HOST] [--public-port PORT] [--username USER] [--password PASS]
+  sb change NAME [--listen-port PORT] [--public-address HOST] [--public-port PORT] [--tls-sni HOST]
   sb list
   sb info NAME
   sb url NAME
@@ -252,8 +252,9 @@ command_add() {
   username=default
   password=
   ss_method=2022-blake3-aes-128-gcm
-  reality_server=www.microsoft.com
+  reality_server=developer.apple.com
   reality_port=443
+  tls_sni=
   cert_source=
   key_source=
   transport=tcp
@@ -276,6 +277,7 @@ command_add() {
       --ss-method) ss_method=$2; shift 2 ;;
       --reality-server) reality_server=$2; shift 2 ;;
       --reality-port) reality_port=$2; shift 2 ;;
+      --tls-sni|--sni) tls_sni=$2; shift 2 ;;
       --cert) cert_source=$2; shift 2 ;;
       --key) key_source=$2; shift 2 ;;
       --transport) transport=$2; shift 2 ;;
@@ -292,8 +294,14 @@ command_add() {
   [ -n "$host" ] || host=$public_address
   [ -n "$public_port" ] || public_port=$listen_port
   [ -n "$name" ] || name="$protocol-$listen_port"
+  if [ -n "$tls_sni" ]; then
+    case "$protocol" in anytls|hysteria2|tuic) ;; *) die '--tls-sni applies only to AnyTLS, Hysteria2, or TUIC' ;; esac
+  else
+    tls_sni=$public_address
+  fi
   validate_name "$name" || die 'invalid node name'
   validate_host "$public_address" || die 'invalid public address'
+  validate_host "$tls_sni" || die 'invalid TLS SNI'
   is_ipv4 "$listen_address" || die 'listen address must be IPv4'
   validate_port "$listen_port" || die 'invalid listen port'
   validate_port "$public_port" || die 'invalid public port'
@@ -308,7 +316,7 @@ command_add() {
   cert_stage=$work/certs
   protocol_generate "$meta" "$protocol" "$name" "$listen_address" "$listen_port" \
     "$public_address" "$public_port" "$username" "$password" "$ss_method" \
-    "$reality_server" "$reality_port" "$cert_source" "$key_source" "$cert_stage" \
+    "$reality_server" "$reality_port" "$tls_sni" "$cert_source" "$key_source" "$cert_stage" \
     "$transport" "$path" "$host" "$tls_mode" "$acme_email" "$obfs_password"
   protocol_render "$meta" "$config"
   commit_node_change "$name" "$config" "$meta" "$cert_stage" add
@@ -604,6 +612,7 @@ EOF
   menu_username=
   menu_password=
   menu_ss_method=
+  menu_tls_sni=
   if [ "$menu_protocol" = ss2022 ]; then
     interactive_select_ss2022_method default || return 1
   fi
@@ -613,6 +622,12 @@ EOF
     printf 'SOCKS5 密码（留空自动生成）: '
     read -r menu_password
   fi
+  case "$menu_protocol" in
+    anytls|hysteria2|tuic)
+      printf 'TLS SNI（留空则跟随公网 IP 或域名）: '
+      read -r menu_tls_sni
+      ;;
+  esac
 
   set -- "$menu_protocol"
   [ -z "$menu_name" ] || set -- "$@" --name "$menu_name"
@@ -622,6 +637,7 @@ EOF
   [ -z "$menu_username" ] || set -- "$@" --username "$menu_username"
   [ -z "$menu_password" ] || set -- "$@" --password "$menu_password"
   [ -z "$menu_ss_method" ] || set -- "$@" --ss-method "$menu_ss_method"
+  [ -z "$menu_tls_sni" ] || set -- "$@" --tls-sni "$menu_tls_sni"
   command_add "$@"
 }
 
@@ -765,6 +781,7 @@ interactive_menu() {
         username=
         password=
         ss_method=
+        tls_sni=
         if [ "$protocol" = socks5 ]; then
           printf '新的 SOCKS5 用户名（留空则不修改）: '; read -r username
           printf '新的 SOCKS5 密码（留空则不修改）: '; read -r password
@@ -773,6 +790,12 @@ interactive_menu() {
           interactive_select_ss2022_method keep || continue
           ss_method=$menu_ss_method
         fi
+        case "$protocol" in
+          anytls|hysteria2|tuic)
+            current_tls_sni=$(jq -r '.tls.server_name // .public.address' "$(node_meta_file "$name")")
+            printf '新的 TLS SNI（当前 %s，留空则不修改）: ' "$current_tls_sni"; read -r tls_sni
+            ;;
+        esac
         set -- "$name"
         [ -z "$listen_port" ] || set -- "$@" --listen-port "$listen_port"
         [ -z "$address" ] || set -- "$@" --public-address "$address"
@@ -780,6 +803,7 @@ interactive_menu() {
         [ -z "$username" ] || set -- "$@" --username "$username"
         [ -z "$password" ] || set -- "$@" --password "$password"
         [ -z "$ss_method" ] || set -- "$@" --ss-method "$ss_method"
+        [ -z "$tls_sni" ] || set -- "$@" --tls-sni "$tls_sni"
         command_change "$@"
         ;;
       7) if interactive_select_node; then command_enable "$menu_selected_node"; fi ;;

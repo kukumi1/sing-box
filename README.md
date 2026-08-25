@@ -120,6 +120,7 @@ sb export --all            # 导出全部节点
 --listen-port PORT
 --public-address HOST
 --public-port PORT
+--tls-sni HOST
 --username NAME
 --password PASSWORD
 ```
@@ -131,11 +132,12 @@ sb export --all            # 导出全部节点
 --path /proxy
 --host example.com
 --tls-mode none|self-signed|trusted|caddy|acme
+--tls-sni HOST
 --cert /path/to/fullchain.pem
 --key /path/to/private.key
 --acme-email admin@example.com
 --ss-method 2022-blake3-aes-128-gcm
---reality-server www.microsoft.com
+--reality-server developer.apple.com
 --reality-port 443
 --obfs-password PASSWORD
 ```
@@ -148,6 +150,15 @@ sb add hysteria2 \
   --listen-port 30011 \
   --public-address hy2.example.com \
   --public-port 64493
+
+# 连接仍指向你的服务器；仅将客户端 TLS SNI 设为指定域名。
+# 自签名节点会在生成链接中启用 insecure=1。
+sb add anytls \
+  --name anytls-sni \
+  --listen-port 30013 \
+  --public-address 203.0.113.10 \
+  --public-port 64495 \
+  --tls-sni developer.apple.com
 
 sb add tuic \
   --name tuic-main \
@@ -181,6 +192,8 @@ sb add anytls \
 ```
 
 AnyTLS ACME 会根据 sing-box 版本自动生成兼容配置：1.12/1.13 使用旧版 `tls.acme`，1.14+ 使用 `certificate_provider`。
+
+`--tls-sni` 适用于 AnyTLS、Hysteria2 和 TUIC。它只修改客户端 TLS SNI，不改变客户端实际连接的公网 IP 或域名。默认值跟随 `--public-address`；自签名节点指定其他 SNI 时生成的链接会带 `insecure=1`。使用 ACME 或受信任证书时，TLS SNI 应与证书覆盖的域名一致。
 
 ## Caddy
 

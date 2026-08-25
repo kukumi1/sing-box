@@ -28,11 +28,12 @@ generate_node_metadata() {
   password=$9
   shift 9
   ss_method=${1:-2022-blake3-aes-128-gcm}
-  reality_server=${2:-www.microsoft.com}
+  reality_server=${2:-developer.apple.com}
   reality_port=${3:-443}
-  cert_source=${4:-}
-  key_source=${5:-}
-  cert_stage_dir=${6:-}
+  tls_server_name=${4:-$public_address}
+  cert_source=${5:-}
+  key_source=${6:-}
+  cert_stage_dir=${7:-}
 
   created_at=$(timestamp)
   transports=$(protocol_transports "$protocol")
@@ -66,9 +67,9 @@ generate_node_metadata() {
         --arg name "$name" --arg protocol "$protocol" --arg listen_address "$listen_address" \
         --argjson listen_port "$listen_port" --arg public_address "$public_address" \
         --argjson public_port "$public_port" --arg username "$username" --arg password "$password" \
-        --arg tls_mode "$tls_mode" --argjson insecure "$insecure" --arg created_at "$created_at" \
+        --arg tls_mode "$tls_mode" --argjson insecure "$insecure" --arg tls_server_name "$tls_server_name" --arg created_at "$created_at" \
         --argjson transports "$transports" \
-        '{schema:1,name:$name,protocol:$protocol,listen:{address:$listen_address,port:$listen_port,transports:$transports},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:$tls_mode,insecure:$insecure},created_at:$created_at,updated_at:$created_at}' >"$output"
+        '{schema:1,name:$name,protocol:$protocol,listen:{address:$listen_address,port:$listen_port,transports:$transports},public:{address:$public_address,port:$public_port},credentials:{username:$username,password:$password},tls:{mode:$tls_mode,insecure:$insecure,server_name:$tls_server_name},created_at:$created_at,updated_at:$created_at}' >"$output"
       ;;
     ss2022)
       bytes=$(ss_key_bytes "$ss_method") || die 'unsupported SS2022 method'
@@ -177,7 +178,8 @@ node_share_uri() {
       password=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
       encoded_name=$(uri_encode "$name")
       insecure=$(jq -r 'if .tls.insecure then 1 else 0 end' "$meta")
-      if is_ipv4 "$address"; then query="insecure=$insecure&fp=chrome"; else query="sni=$(uri_encode "$address")&insecure=$insecure&fp=chrome"; fi
+      server_name=$(jq -r '.tls.server_name // .public.address' "$meta")
+      if is_ipv4 "$server_name"; then query="insecure=$insecure&fp=chrome"; else query="sni=$(uri_encode "$server_name")&insecure=$insecure&fp=chrome"; fi
       printf 'anytls://%s@%s:%s?%s#%s\n' "$password" "$address" "$port" "$query" "$encoded_name"
       ;;
     ss2022)

@@ -31,7 +31,7 @@ create_node() {
   cert_stage="$SB_CERT_DIR/$name"
   generate_node_metadata "$meta" "$protocol" "$name" 0.0.0.0 "$port" \
     203.0.113.10 "$((port + 10000))" default '' "${1:-2022-blake3-aes-128-gcm}" \
-    "${2:-www.microsoft.com}" 443 '' '' "$cert_stage"
+    "${2:-developer.apple.com}" 443 "${3:-203.0.113.10}" '' '' "$cert_stage"
   render_node_config "$meta" "$config"
 }
 
@@ -41,6 +41,10 @@ create_node vless-reality test-reality 31003
 create_node socks5 test-socks 31004
 
 sing-box check -c "$SB_BASE_CONFIG" -C "$SB_CONF_DIR"
+
+[ "$(jq -r '.reality.server' "$SB_NODE_DIR/test-reality.json")" = developer.apple.com ]
+node_share_uri "$SB_NODE_DIR/test-reality.json" | grep -Fq 'sni=developer.apple.com'
+[ "$(jq -r '.tls.server_name' "$SB_NODE_DIR/test-anytls.json")" = 203.0.113.10 ]
 
 uri=$(node_share_uri "$SB_NODE_DIR/test-anytls.json")
 printf '%s' "$uri" | grep -q '203.0.113.10:41001'
