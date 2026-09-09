@@ -33,13 +33,24 @@ bootstrap_download() {
   bootstrap_url=$1
   bootstrap_output=$2
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --retry 3 --connect-timeout 15 "$bootstrap_url" -o "$bootstrap_output"
+    curl -fsSL --retry 3 --connect-timeout 15 "$bootstrap_url" -o "$bootstrap_output"
   elif command -v wget >/dev/null 2>&1; then
-    wget -O "$bootstrap_output" "$bootstrap_url"
+    wget -qO "$bootstrap_output" "$bootstrap_url"
   else
     printf 'Error: curl or wget is required for one-command installation\n' >&2
     exit 1
   fi
+}
+
+bootstrap_download_parallel() {
+  bootstrap_download_status=0
+  bootstrap_download "$1" "$2" &
+  bootstrap_archive_pid=$!
+  bootstrap_download "$3" "$4" &
+  bootstrap_checksum_pid=$!
+  wait "$bootstrap_archive_pid" || bootstrap_download_status=1
+  wait "$bootstrap_checksum_pid" || bootstrap_download_status=1
+  return "$bootstrap_download_status"
 }
 
 bootstrap_if_needed() {
@@ -50,8 +61,12 @@ bootstrap_if_needed() {
   bootstrap_base=https://github.com/kukumi1/sing-box/releases/latest/download
 
   printf '==> Downloading the latest verified sb manager release\n'
-  bootstrap_download "$bootstrap_base/sb-manager.tar.gz" "$bootstrap_root/sb-manager.tar.gz"
-  bootstrap_download "$bootstrap_base/sb-manager.tar.gz.sha256" "$bootstrap_root/sb-manager.tar.gz.sha256"
+  bootstrap_download_parallel \
+    "$bootstrap_base/sb-manager.tar.gz" "$bootstrap_root/sb-manager.tar.gz" \
+    "$bootstrap_base/sb-manager.tar.gz.sha256" "$bootstrap_root/sb-manager.tar.gz.sha256" || {
+      printf 'Error: manager release download failed\n' >&2
+      exit 1
+    }
   (cd "$bootstrap_root" && sha256sum -c sb-manager.tar.gz.sha256) || {
     printf 'Error: release checksum verification failed\n' >&2
     exit 1
@@ -155,7 +170,12 @@ install_sing_box_binary() {
   release_tag=$(printf '%s' "$release_json" | jq -r '.tag_name // empty')
   [ -n "$release_tag" ] || die 'cannot determine the latest sing-box release'
   release_version=${release_tag#v}
-  archive_name=sing-box-${release_version}-linux-${binary_arch}-musl.tar.gz
+  case "$PLATFORM" in
+    alpine) binary_libc=musl ;;
+    systemd) binary_libc=glibc ;;
+    *) die "unsupported platform: $PLATFORM" ;;
+  esac
+  archive_name=sing-box-${release_version}-linux-${binary_arch}-${binary_libc}.tar.gz
   archive_url=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .browser_download_url')
   expected_checksum=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://')
   [ -n "$archive_url" ] || die "official release asset not found: $archive_name"
@@ -163,7 +183,7 @@ install_sing_box_binary() {
   binary_root=$(mktemp -d /tmp/sing-box-install.XXXXXX)
 
   info "Downloading official sing-box ${release_version} for ${binary_arch}"
-  curl -fL --retry 3 --connect-timeout 15 "$archive_url" -o "$binary_root/$archive_name"
+  curl -fsSL --retry 3 --connect-timeout 15 "$archive_url" -o "$binary_root/$archive_name"
   printf '%s  %s\n' "$expected_checksum" "$binary_root/$archive_name" | sha256sum -c - || {
     rm -rf "$binary_root"
     die 'sing-box archive checksum verification failed'
@@ -179,37 +199,126 @@ install_sing_box_binary() {
   hash -r 2>/dev/null || true
   /usr/bin/sing-box version >/dev/null 2>&1 || {
     rm -rf "$binary_root"
-    die 'the downloaded sing-box binary cannot run on this Alpine system'
+    die "the downloaded sing-box binary cannot run on this $PLATFORM system"
   }
   rm -rf "$binary_root"
 }
 
+missing_commands() {
+  missing_command_list=
+  for required_command in "$@"; do
+    command -v "$required_command" >/dev/null 2>&1 || missing_command_list="$missing_command_list $required_command"
+  done
+  printf '%s\n' "${missing_command_list# }"
+}
+
+runtime_tools_missing() {
+  runtime_missing=$(missing_commands "$@") || true
+  case "$PLATFORM" in
+    alpine) [ -r /etc/ssl/cert.pem ] || runtime_missing="$runtime_missing ca-certificates" ;;
+    systemd) [ -r /etc/ssl/certs/ca-certificates.crt ] || runtime_missing="$runtime_missing ca-certificates" ;;
+  esac
+  printf '%s\n' "${runtime_missing# }"
+}
+
+debian_packages_for_missing() {
+  package_list=
+  for missing_command in $1; do
+    case "$missing_command" in
+      curl) package_list="$package_list curl" ;;
+      jq) package_list="$package_list jq" ;;
+      openssl) package_list="$package_list openssl" ;;
+      tar) package_list="$package_list tar" ;;
+      flock) package_list="$package_list util-linux" ;;
+      ip|ss) package_list="$package_list iproute2" ;;
+      qrencode) package_list="$package_list qrencode" ;;
+      iptables|iptables-save|iptables-restore) package_list="$package_list iptables" ;;
+      socat) package_list="$package_list socat" ;;
+      ca-certificates) package_list="$package_list ca-certificates" ;;
+      groupadd|useradd) package_list="$package_list passwd" ;;
+    esac
+  done
+  printf '%s\n' "$package_list" | awk '{for (i=1; i<=NF; i++) if (!seen[$i]++) printf "%s%s", (out ? " " : ""), $i; out=1} END {if (out) printf "\n"}'
+}
+
+alpine_packages_for_missing() {
+  package_list=
+  for missing_command in $1; do
+    case "$missing_command" in
+      curl) package_list="$package_list curl" ;;
+      jq) package_list="$package_list jq" ;;
+      openssl) package_list="$package_list openssl" ;;
+      tar) package_list="$package_list tar" ;;
+      flock) package_list="$package_list util-linux" ;;
+      ip|ss) package_list="$package_list iproute2" ;;
+      qrencode) package_list="$package_list libqrencode-tools" ;;
+      iptables|iptables-save|iptables-restore) package_list="$package_list iptables" ;;
+      socat) package_list="$package_list socat" ;;
+      ca-certificates) package_list="$package_list ca-certificates" ;;
+    esac
+  done
+  printf '%s\n' "$package_list" | awk '{for (i=1; i<=NF; i++) if (!seen[$i]++) printf "%s%s", (out ? " " : ""), $i; out=1} END {if (out) printf "\n"}'
+}
+
+sing_box_version_supported() {
+  [ -x /usr/bin/sing-box ] || return 1
+  installed_core_version=$(/usr/bin/sing-box version 2>/dev/null | awk 'NR==1 {print $3; exit}')
+  case "$installed_core_version" in
+    [0-9]*.[0-9]*.*) ;;
+    *) return 1 ;;
+  esac
+  installed_core_major=${installed_core_version%%.*}
+  installed_core_rest=${installed_core_version#*.}
+  installed_core_minor=${installed_core_rest%%.*}
+  [ "$installed_core_major" -gt 1 ] || { [ "$installed_core_major" -eq 1 ] && [ "$installed_core_minor" -ge 12 ]; }
+}
+
+ensure_sing_box_account() {
+  [ "$PLATFORM" = systemd ] || return 0
+  command -v groupadd >/dev/null 2>&1 || die 'groupadd is required to create the sing-box service account'
+  command -v useradd >/dev/null 2>&1 || die 'useradd is required to create the sing-box service account'
+  getent group sing-box >/dev/null 2>&1 || groupadd --system sing-box
+  id -u sing-box >/dev/null 2>&1 || useradd --system --gid sing-box --no-create-home --shell /usr/sbin/nologin sing-box
+}
+
+install_debian_packages() {
+  debian_missing=$(runtime_tools_missing curl jq openssl tar flock ip ss qrencode iptables iptables-save iptables-restore socat groupadd useradd)
+  [ -n "$debian_missing" ] || return 0
+  debian_packages=$(debian_packages_for_missing "$debian_missing")
+  info "Installing missing runtime tools: $debian_missing"
+  apt-get update -qq
+  apt-get install -y --no-install-recommends -qq $debian_packages
+}
+
+install_alpine_packages() {
+  alpine_missing=$(runtime_tools_missing curl jq openssl tar flock ip ss qrencode iptables iptables-save iptables-restore socat)
+  [ -n "$alpine_missing" ] || return 0
+  alpine_packages=$(alpine_packages_for_missing "$alpine_missing")
+  info "Installing missing runtime tools: $alpine_missing"
+  apk add --no-cache --quiet $alpine_packages
+}
+
 install_packages() {
   if [ "$PLATFORM" = alpine ]; then
-    apk add --no-cache jq openssl ca-certificates curl tar util-linux libqrencode-tools iptables socat
-    if apk add --no-cache sing-box; then
+    install_alpine_packages
+    if sing_box_version_supported; then
+      info "Using installed sing-box $(/usr/bin/sing-box version | awk 'NR==1 {print $3}')"
       return
     fi
-    info 'The Alpine repository has no sing-box package; using the official verified binary'
+    info 'Installing sing-box from the official verified release'
     install_sing_box_binary
     return
   fi
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y --no-install-recommends ca-certificates curl jq openssl tar util-linux iproute2 qrencode iptables procps socat
-  install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-  chmod 0644 /etc/apt/keyrings/sagernet.asc
-  cat >/etc/apt/sources.list.d/sagernet.sources <<'EOF'
-Types: deb
-URIs: https://deb.sagernet.org/
-Suites: *
-Components: *
-Enabled: yes
-Signed-By: /etc/apt/keyrings/sagernet.asc
-EOF
-  apt-get update
-  apt-get install -y --no-install-recommends sing-box
+  install_debian_packages
+  if sing_box_version_supported; then
+    info "Using installed sing-box $(/usr/bin/sing-box version | awk 'NR==1 {print $3}')"
+    ensure_sing_box_account
+    return
+  fi
+  info 'Installing sing-box from the official verified release'
+  install_sing_box_binary
+  ensure_sing_box_account
 }
 
 write_base_config() {
@@ -268,7 +377,7 @@ if [ "$legacy_config" -eq 1 ]; then
   tar -C / -czf "$backup" etc/sing-box var/lib/sing-box-installer root/sing-box-client.txt 2>/dev/null || true
   chmod 0600 "$backup" 2>/dev/null || true
 fi
-info 'Installing packages'
+info 'Checking runtime tools'
 install_packages
 core_output=$(/usr/bin/sing-box version) || die 'sing-box was installed but cannot run on this system'
 core_version=$(printf '%s\n' "$core_output" | awk 'NR==1{print $3}')
@@ -301,7 +410,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.3.12"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.3.13"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json
