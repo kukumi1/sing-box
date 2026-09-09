@@ -12,6 +12,10 @@ cat >"$TEST_ROOT/bin/iptables-save" <<'EOF'
 printf '%s\n' 'iptables-save v1.8.11 (nf_tables): Could not fetch rule set generation id: Permission denied (you must be root)' >&2
 exit 1
 EOF
+cat >"$TEST_ROOT/bin/iptables" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
 cat >"$TEST_ROOT/bin/getent" <<'EOF'
 #!/bin/sh
 [ "${FW_DNS_FAIL:-0}" != 1 ] || exit 2

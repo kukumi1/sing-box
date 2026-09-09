@@ -117,6 +117,20 @@ EOF
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
 
+run_quiet() {
+  quiet_label=$1
+  shift
+  quiet_log=$(mktemp /tmp/sb-install-command.XXXXXX)
+  if "$@" >"$quiet_log" 2>&1; then
+    rm -f "$quiet_log"
+    return 0
+  fi
+  printf 'Error: %s failed\n' "$quiet_label" >&2
+  cat "$quiet_log" >&2
+  rm -f "$quiet_log"
+  return 1
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --server-address) [ "$#" -ge 2 ] || die '--server-address requires a value'; SERVER_ADDRESS=$2; shift 2 ;;
@@ -289,20 +303,20 @@ ensure_sing_box_account() {
 }
 
 install_debian_packages() {
-  debian_missing=$(runtime_tools_missing curl jq openssl tar flock ip ss qrencode iptables iptables-save iptables-restore socat groupadd useradd)
+  debian_missing=$(runtime_tools_missing curl jq openssl tar flock groupadd useradd)
   [ -n "$debian_missing" ] || return 0
   debian_packages=$(debian_packages_for_missing "$debian_missing")
   info "Installing missing runtime tools: $debian_missing"
-  apt-get update -qq
-  apt-get install -y --no-install-recommends -qq $debian_packages
+  run_quiet 'apt package index refresh' apt-get update -qq
+  run_quiet 'runtime tool installation' apt-get install -y --no-install-recommends -qq $debian_packages
 }
 
 install_alpine_packages() {
-  alpine_missing=$(runtime_tools_missing curl jq openssl tar flock ip ss qrencode iptables iptables-save iptables-restore socat)
+  alpine_missing=$(runtime_tools_missing curl jq openssl tar flock)
   [ -n "$alpine_missing" ] || return 0
   alpine_packages=$(alpine_packages_for_missing "$alpine_missing")
   info "Installing missing runtime tools: $alpine_missing"
-  apk add --no-cache --quiet $alpine_packages
+  run_quiet 'runtime tool installation' apk add --no-cache --quiet $alpine_packages
 }
 
 install_packages() {
@@ -417,7 +431,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.3.14"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.3.15"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json

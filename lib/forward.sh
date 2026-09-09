@@ -9,6 +9,45 @@ SB_FORWARD_BACKEND=${SB_FORWARD_BACKEND:-auto}
 SB_FORWARD_SYSTEMD_DIR=${SB_FORWARD_SYSTEMD_DIR:-/etc/systemd/system}
 SB_FORWARD_SOCAT_PREFIX=${SB_FORWARD_SOCAT_PREFIX:-sb-forward-socat-}
 
+forward_install_iptables_tools() {
+  forward_missing=
+  for forward_command in iptables iptables-save iptables-restore; do
+    command -v "$forward_command" >/dev/null 2>&1 || forward_missing="$forward_missing $forward_command"
+  done
+  [ -z "$forward_missing" ] && return 0
+
+  info "正在安装端口转发所需工具:${forward_missing}"
+  if [ "$SB_PLATFORM" = alpine ]; then
+    apk add --no-cache --quiet iptables
+  else
+    export DEBIAN_FRONTEND=noninteractive
+    forward_log=$(mktemp /tmp/sb-forward-packages.XXXXXX)
+    if ! apt-get update -qq >"$forward_log" 2>&1 || ! apt-get install -y --no-install-recommends -qq iptables >>"$forward_log" 2>&1; then
+      cat "$forward_log" >&2
+      rm -f "$forward_log"
+      return 1
+    fi
+    rm -f "$forward_log"
+  fi
+}
+
+forward_install_socat_tool() {
+  command -v socat >/dev/null 2>&1 && return 0
+  info '正在安装 socat 用户态中继'
+  if [ "$SB_PLATFORM" = alpine ]; then
+    apk add --no-cache --quiet socat
+  else
+    export DEBIAN_FRONTEND=noninteractive
+    forward_log=$(mktemp /tmp/sb-forward-socat.XXXXXX)
+    if ! apt-get update -qq >"$forward_log" 2>&1 || ! apt-get install -y --no-install-recommends -qq socat >>"$forward_log" 2>&1; then
+      cat "$forward_log" >&2
+      rm -f "$forward_log"
+      return 1
+    fi
+    rm -f "$forward_log"
+  fi
+}
+
 forward_config_file() {
   printf '%s/%s.json\n' "$SB_FORWARD_DIR" "$1"
 }
@@ -444,7 +483,13 @@ forward_sync_locked() {
 }
 
 command_forward_sync() {
-  fw_backend=$(forward_select_backend) || die '无法选择可用的端口转发后端'
+  forward_install_iptables_tools || die '端口转发依赖安装失败'
+  fw_backend=$(forward_select_backend || true)
+  if [ -z "$fw_backend" ] && [ "$SB_FORWARD_BACKEND" = auto ] && [ "$SB_PLATFORM" = systemd ]; then
+    forward_install_socat_tool || die 'socat 依赖安装失败'
+    fw_backend=$(forward_select_backend || true)
+  fi
+  [ -n "$fw_backend" ] || die '无法选择可用的端口转发后端'
   forward_require_sync_commands "$fw_backend"
   fw_quiet=0
   [ "${1:-}" != --quiet ] || fw_quiet=1

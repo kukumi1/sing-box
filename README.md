@@ -34,7 +34,7 @@ HTTP 类传输可以使用 sing-box 原生 TLS 或 Caddy 自动 HTTPS。Hysteria
 bash <(wget -qO- https://raw.githubusercontent.com/kukumi1/sing-box/main/install.sh)
 ```
 
-脚本会自动检测 VPS 的公网 IPv4，并将其作为默认连接地址；直接回车即可采用，也可以输入其他 IP 或域名覆盖。随后脚本会并行下载最新 Release 与 SHA-256 校验文件，再执行完整安装。已具备所需工具和 sing-box 的服务器会跳过软件源刷新与依赖安装。
+脚本会自动检测 VPS 的公网 IPv4，并将其作为默认连接地址；直接回车即可采用，也可以输入其他 IP 或域名覆盖。随后脚本会并行下载最新 Release 与 SHA-256 校验文件，再执行完整安装。已具备所需工具和 sing-box 的服务器会跳过软件源刷新与依赖安装；二维码和端口转发依赖会在首次使用对应功能时安装。
 
 Alpine 如果没有 Bash：
 
