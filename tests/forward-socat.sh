@@ -16,6 +16,11 @@ cat >"$TEST_ROOT/bin/iptables" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+cat >"$TEST_ROOT/bin/iptables-restore" <<'EOF'
+#!/bin/sh
+cat >/dev/null
+exit 0
+EOF
 cat >"$TEST_ROOT/bin/getent" <<'EOF'
 #!/bin/sh
 [ "${FW_DNS_FAIL:-0}" != 1 ] || exit 2
