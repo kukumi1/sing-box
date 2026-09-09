@@ -171,6 +171,42 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
+filesystem_type_of() {
+  awk -v target="$1" '
+    {
+      mount_point = $2
+      probe = target
+      if (substr(probe, length(probe)) != "/") probe = probe "/"
+      candidate = mount_point
+      if (substr(candidate, length(candidate)) != "/") candidate = candidate "/"
+      if (index(probe, candidate) == 1 && length(mount_point) >= widest) {
+        widest = length(mount_point)
+        found = $3
+      }
+    }
+    END { if (found != "") print found }
+  ' /proc/mounts 2>/dev/null || true
+}
+
+available_kib_of() {
+  df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }' || true
+}
+
+# 核心压缩包必须落在真正的磁盘上：/tmp 在多数 NAT 容器里是 tmpfs，
+# 往里写等同于吃内存，小内存机器会被内核 OOM 掉整个 SSH 会话。
+disk_backed_tmpdir() {
+  for tmpdir_candidate in "${TMPDIR:-}" /var/tmp /tmp; do
+    [ -n "$tmpdir_candidate" ] || continue
+    [ -d "$tmpdir_candidate" ] && [ -w "$tmpdir_candidate" ] || continue
+    case "$(filesystem_type_of "$tmpdir_candidate")" in
+      tmpfs|ramfs) continue ;;
+    esac
+    printf '%s\n' "$tmpdir_candidate"
+    return 0
+  done
+  return 1
+}
+
 install_sing_box_binary() {
   case "$(uname -m)" in
     x86_64) binary_arch=amd64 ;;
@@ -192,30 +228,70 @@ install_sing_box_binary() {
   archive_name=sing-box-${release_version}-linux-${binary_arch}-${binary_libc}.tar.gz
   archive_url=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .browser_download_url')
   expected_checksum=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://')
+  archive_bytes=$(printf '%s' "$release_json" | jq -r --arg name "$archive_name" '.assets[] | select(.name == $name) | .size // empty')
   [ -n "$archive_url" ] || die "official release asset not found: $archive_name"
   [ -n "$expected_checksum" ] || die 'official release asset has no SHA-256 digest'
-  binary_root=$(mktemp -d /tmp/sing-box-install.XXXXXX)
+
+  binary_workdir=$(disk_backed_tmpdir || printf '/var/tmp\n')
+  binary_root=$(mktemp -d "$binary_workdir/sing-box-install.XXXXXX")
+  staged_binary=/usr/bin/.sing-box.new.$$
+  # 上一次安装若被强行中断，可能在只有几百 MB 的容器根分区里留下一份 88MB 残file
+  rm -f /usr/bin/.sing-box.new.* 2>/dev/null || true
+
+  # 解压后的核心约为压缩包的三倍。空间不足时给出明确提示，
+  # 而不是让 tar 写到一半把机器拖垮。
+  if [ -n "$archive_bytes" ]; then
+    workdir_need_kib=$((archive_bytes / 1024 + 16384))
+    target_need_kib=$((archive_bytes / 1024 * 3 + 16384))
+    workdir_free_kib=$(available_kib_of "$binary_root")
+    target_free_kib=$(available_kib_of /usr/bin)
+    if [ -n "$workdir_free_kib" ] && [ "$workdir_free_kib" -lt "$workdir_need_kib" ]; then
+      rm -rf "$binary_root"
+      die "临时目录 $binary_workdir 剩余 ${workdir_free_kib}KiB，安装核心需要约 ${workdir_need_kib}KiB"
+    fi
+    if [ -n "$target_free_kib" ] && [ "$target_free_kib" -lt "$target_need_kib" ]; then
+      rm -rf "$binary_root"
+      die "/usr/bin 剩余 ${target_free_kib}KiB，安装核心需要约 ${target_need_kib}KiB"
+    fi
+  fi
 
   info "Downloading official sing-box ${release_version} for ${binary_arch}"
-  curl -fsSL --retry 3 --connect-timeout 15 "$archive_url" -o "$binary_root/$archive_name"
-  printf '%s  %s\n' "$expected_checksum" "$binary_root/$archive_name" | sha256sum -c - || {
+  curl -fsSL --retry 3 --connect-timeout 15 "$archive_url" -o "$binary_root/$archive_name" || {
+    rm -rf "$binary_root"
+    die 'sing-box archive download failed'
+  }
+  printf '%s  %s\n' "$expected_checksum" "$binary_root/$archive_name" | sha256sum -c - >/dev/null 2>&1 || {
     rm -rf "$binary_root"
     die 'sing-box archive checksum verification failed'
   }
 
-  tar -xzf "$binary_root/$archive_name" -C "$binary_root"
-  binary_path=$(find "$binary_root" -type f -name sing-box | head -n 1)
-  [ -n "$binary_path" ] || {
-    rm -rf "$binary_root"
-    die 'sing-box binary was not found in the official archive'
+  # 官方压缩包里只有一个可执行文件，直接流式解压到目标文件系统。
+  # 旧流程先整包解压再 install 复制，会让 31MB 压缩包 + 两份 88MB 二进制
+  # 同时存在（峰值约 206MB），192MB 内存的 NAT 容器因此被 OOM 断开 SSH。
+  info 'Installing the verified sing-box core'
+  archive_member=${archive_name%.tar.gz}/sing-box
+  if ! tar -xzOf "$binary_root/$archive_name" "$archive_member" >"$staged_binary" 2>/dev/null; then
+    archive_member=$(tar -tzf "$binary_root/$archive_name" 2>/dev/null | grep -m 1 '/sing-box$' || true)
+    if [ -z "$archive_member" ] || ! tar -xzOf "$binary_root/$archive_name" "$archive_member" >"$staged_binary" 2>/dev/null; then
+      rm -f "$staged_binary"
+      rm -rf "$binary_root"
+      die 'sing-box binary was not found in the official archive'
+    fi
+  fi
+  rm -rf "$binary_root"
+
+  [ -s "$staged_binary" ] || {
+    rm -f "$staged_binary"
+    die 'the extracted sing-box binary is empty'
   }
-  install -m 0755 "$binary_path" /usr/bin/sing-box
-  hash -r 2>/dev/null || true
-  /usr/bin/sing-box version >/dev/null 2>&1 || {
-    rm -rf "$binary_root"
+  chmod 0755 "$staged_binary"
+  "$staged_binary" version >/dev/null 2>&1 || {
+    rm -f "$staged_binary"
     die "the downloaded sing-box binary cannot run on this $PLATFORM system"
   }
-  rm -rf "$binary_root"
+  # rename 而不是 install：核心正在运行时也能替换，不会触发 ETXTBSY
+  mv -f "$staged_binary" /usr/bin/sing-box
+  hash -r 2>/dev/null || true
 }
 
 missing_commands() {
@@ -431,7 +507,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.3.16"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.3.17"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json
