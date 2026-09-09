@@ -221,43 +221,50 @@ runtime_tools_missing() {
   printf '%s\n' "${runtime_missing# }"
 }
 
+append_package_once() {
+  case " $package_list " in
+    *" $1 "*) ;;
+    *) package_list="$package_list $1" ;;
+  esac
+}
+
 debian_packages_for_missing() {
   package_list=
   for missing_command in $1; do
     case "$missing_command" in
-      curl) package_list="$package_list curl" ;;
-      jq) package_list="$package_list jq" ;;
-      openssl) package_list="$package_list openssl" ;;
-      tar) package_list="$package_list tar" ;;
-      flock) package_list="$package_list util-linux" ;;
-      ip|ss) package_list="$package_list iproute2" ;;
-      qrencode) package_list="$package_list qrencode" ;;
-      iptables|iptables-save|iptables-restore) package_list="$package_list iptables" ;;
-      socat) package_list="$package_list socat" ;;
-      ca-certificates) package_list="$package_list ca-certificates" ;;
-      groupadd|useradd) package_list="$package_list passwd" ;;
+      curl) append_package_once curl ;;
+      jq) append_package_once jq ;;
+      openssl) append_package_once openssl ;;
+      tar) append_package_once tar ;;
+      flock) append_package_once util-linux ;;
+      ip|ss) append_package_once iproute2 ;;
+      qrencode) append_package_once qrencode ;;
+      iptables|iptables-save|iptables-restore) append_package_once iptables ;;
+      socat) append_package_once socat ;;
+      ca-certificates) append_package_once ca-certificates ;;
+      groupadd|useradd) append_package_once passwd ;;
     esac
   done
-  printf '%s\n' "$package_list" | awk '{for (i=1; i<=NF; i++) if (!seen[$i]++) printf "%s%s", (out ? " " : ""), $i; out=1} END {if (out) printf "\n"}'
+  printf '%s\n' "$package_list"
 }
 
 alpine_packages_for_missing() {
   package_list=
   for missing_command in $1; do
     case "$missing_command" in
-      curl) package_list="$package_list curl" ;;
-      jq) package_list="$package_list jq" ;;
-      openssl) package_list="$package_list openssl" ;;
-      tar) package_list="$package_list tar" ;;
-      flock) package_list="$package_list util-linux" ;;
-      ip|ss) package_list="$package_list iproute2" ;;
-      qrencode) package_list="$package_list libqrencode-tools" ;;
-      iptables|iptables-save|iptables-restore) package_list="$package_list iptables" ;;
-      socat) package_list="$package_list socat" ;;
-      ca-certificates) package_list="$package_list ca-certificates" ;;
+      curl) append_package_once curl ;;
+      jq) append_package_once jq ;;
+      openssl) append_package_once openssl ;;
+      tar) append_package_once tar ;;
+      flock) append_package_once util-linux ;;
+      ip|ss) append_package_once iproute2 ;;
+      qrencode) append_package_once libqrencode-tools ;;
+      iptables|iptables-save|iptables-restore) append_package_once iptables ;;
+      socat) append_package_once socat ;;
+      ca-certificates) append_package_once ca-certificates ;;
     esac
   done
-  printf '%s\n' "$package_list" | awk '{for (i=1; i<=NF; i++) if (!seen[$i]++) printf "%s%s", (out ? " " : ""), $i; out=1} END {if (out) printf "\n"}'
+  printf '%s\n' "$package_list"
 }
 
 sing_box_version_supported() {
@@ -410,7 +417,7 @@ if [ "$existing_manager" -eq 0 ]; then
   jq -n --arg server_address "$SERVER_ADDRESS" \
     '{schema:1,manager_version:"3.0.0",server_address:$server_address}' >/etc/sing-box/manager.json
 fi
-jq '.manager_version="3.3.13"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
+jq '.manager_version="3.3.14"' /etc/sing-box/manager.json >/etc/sing-box/manager.json.tmp
 mv /etc/sing-box/manager.json.tmp /etc/sing-box/manager.json
 
 chmod 0640 /etc/sing-box/config.json
