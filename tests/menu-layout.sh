@@ -45,11 +45,18 @@ grep -F '【节点管理】' "$main_output" >/dev/null
 grep -F '【服务与维护】' "$main_output" >/dev/null
 grep -F '【网络工具】' "$main_output" >/dev/null
 grep -F '[18] 删除全部节点' "$main_output" >/dev/null
-grep -F '请选择操作 [0-18]:' "$main_output" >/dev/null
+grep -F '[19] 卸载管理器' "$main_output" >/dev/null
+grep -F '请选择操作 [0-19]:' "$main_output" >/dev/null
 if grep -q "$(printf '\033')" "$main_output"; then
   printf '%s\n' 'Expected non-interactive menu output without ANSI escape codes.' >&2
   exit 1
 fi
+
+uninstall_output=$TEST_ROOT/uninstall-output.txt
+printf '%s\n' 19 0 0 | run_menu >"$uninstall_output"
+grep -F '卸载 sb 管理器：' "$uninstall_output" >/dev/null
+grep -F '卸载管理器，保留节点、证书、备份与核心' "$uninstall_output" >/dev/null
+grep -F '彻底卸载：删除管理器、全部数据与 sing-box 核心' "$uninstall_output" >/dev/null
 
 forward_output=$TEST_ROOT/forward-output.txt
 printf '%s\n' 17 0 0 | run_menu >"$forward_output"

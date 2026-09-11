@@ -20,7 +20,7 @@ LIB_DIR=${SB_LIB_DIR:-/usr/local/lib/sb-manager}
 . "$LIB_DIR/migrate.sh"
 . "$LIB_DIR/forward.sh"
 
-VERSION=3.3.17
+VERSION=3.3.18
 
 ui_interactive_terminal() {
   [ -t 0 ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]
@@ -119,6 +119,7 @@ ui_main_menu_view() {
   ui_section 服务与维护
   printf '  %s[11]%s 服务状态      %s[12]%s 重启服务      %s[13]%s 创建备份\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[14]%s 恢复备份      %s[15]%s 更新管理器    %s[16]%s 系统诊断\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
+  printf '  %s[19]%s 卸载管理器\n' "$UI_RED" "$UI_RESET"
   ui_section 网络工具
   printf '  %s[17]%s 动态端口转发\n' "$UI_GREEN" "$UI_RESET"
   printf '\n%s  ─────────────────────────────────────────────%s\n' "$UI_MUTED" "$UI_RESET"
@@ -530,7 +531,7 @@ command_uninstall() {
     case "$1" in --purge) purge=1 ;; --remove-core) remove_core=1 ;; --yes) yes=1 ;; *) die "unknown uninstall option: $1" ;; esac
     shift
   done
-  [ "$yes" -eq 1 ] || confirm 'Uninstall sb manager?' || return 0
+  [ "$yes" -eq 1 ] || confirm '确定卸载 sb 管理器吗？' || return 0
   service_active && service_stop || true
   service_enabled && service_disable || true
   forward_uninstall
@@ -540,8 +541,39 @@ command_uninstall() {
   [ "$purge" -eq 0 ] || rm -rf "$SB_HOME"
   if [ "$remove_core" -eq 1 ]; then
     if [ "$SB_PLATFORM" = alpine ]; then apk del sing-box sing-box-openrc || true; else apt-get remove -y sing-box || true; fi
+    rm -f /usr/bin/sing-box
   fi
   info 'sb 管理器已卸载'
+}
+
+interactive_uninstall() {
+  cat <<'EOF'
+
+卸载 sb 管理器：
+1) 卸载管理器，保留节点、证书、备份与核心
+2) 卸载管理器并删除全部节点、证书、转发与备份
+3) 彻底卸载：删除管理器、全部数据与 sing-box 核心
+0) 返回主菜单
+EOF
+  printf '请选择卸载方式: '
+  read -r uninstall_choice
+  case "$uninstall_choice" in
+    1)
+      confirm '确定卸载管理器并保留全部节点数据吗？' || return 1
+      command_uninstall --yes
+      ;;
+    2)
+      confirm '确定删除管理器及全部节点、证书、转发与备份吗？' || return 1
+      command_uninstall --purge --yes
+      ;;
+    3)
+      confirm '确定彻底删除管理器、全部数据与 sing-box 核心吗？' || return 1
+      command_uninstall --purge --remove-core --yes
+      ;;
+    0) return 1 ;;
+    *) warn '无效的卸载方式'; return 1 ;;
+  esac
+  return 0
 }
 
 interactive_select_ss2022_method() {
@@ -762,7 +794,7 @@ interactive_forward_menu() {
 interactive_menu() {
   while :; do
     ui_main_menu_view
-    printf '%s请选择操作 [0-18]: %s' "$UI_YELLOW" "$UI_RESET"
+    printf '%s请选择操作 [0-19]: %s' "$UI_YELLOW" "$UI_RESET"
     read -r choice
     case "$choice" in
       1) interactive_add_node ;;
@@ -818,6 +850,7 @@ interactive_menu() {
       16) command_doctor ;;
       17) interactive_forward_menu; continue ;;
       18) command_delete_all ;;
+      19) if interactive_uninstall; then return 0; fi ;;
       0) return 0 ;;
       *) warn '无效的选项，请重新输入' ;;
     esac

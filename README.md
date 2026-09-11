@@ -318,6 +318,8 @@ sb core rollback
 
 ## 卸载
 
+交互菜单中选择 `19) 卸载管理器`，可选择保留节点数据、清除全部数据，或连同 sing-box 核心一起删除。
+
 ```sh
 sb uninstall
 sb uninstall --purge --remove-core --yes
