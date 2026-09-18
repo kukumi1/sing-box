@@ -34,5 +34,8 @@ jq -e '.address_family == "dual" and .listen.address == "::"' "$TEST_HOME/nodes/
 run_sb url dual-node | grep -Fq '@[2001:db8::12]:44003'
 run_sb delete v6-node --yes >/dev/null
 [ ! -f "$TEST_HOME/nodes/v6-node.json" ]
+printf '20\n2\n2\nmenu-nat-v6\n\n34010\n2001:db8::20\n44010\n\n0\n0\n' \
+  | SB_HOME=$TEST_HOME SB_LIB_DIR=$TEST_LIB SB_LOCK_FILE=$TEST_ROOT/menu.lock sh "$REPO_DIR/sb" >/dev/null
+jq -e '.address_family == "ipv6" and .listen.address == "::" and .listen.port == 34010 and .public.port == 44010' "$TEST_HOME/nodes/menu-nat-v6.json" >/dev/null
 sing-box check -c "$TEST_HOME/config.json" -C "$TEST_HOME/conf.d"
 printf 'IPv6 integration test passed.\n'
