@@ -21,7 +21,7 @@ generate_tls_assets() {
     printf 'trusted\n'
     return
   fi
-  if is_ipv4 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
+  if is_ipv4 "$public_address" || is_ipv6 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
   openssl ecparam -genkey -name prime256v1 -out "$cert_dir/key.pem"
   openssl req -new -x509 -key "$cert_dir/key.pem" -sha256 -days 3650 \
     -out "$cert_dir/cert.pem" -subj "/CN=$public_address" -addext "subjectAltName=$san"
@@ -178,7 +178,7 @@ protocol_share_uri() {
   meta=$1
   protocol=$(jq -r '.protocol' "$meta")
   if ! extended_protocol "$protocol"; then node_share_uri "$meta"; return; fi
-  name=$(jq -r '.name' "$meta"); address=$(jq -r '.public.address' "$meta"); port=$(jq -r '.public.port' "$meta")
+  name=$(jq -r '.name' "$meta"); address=$(jq -r '.public.address' "$meta"); uri_address=$(format_uri_host "$address"); port=$(jq -r '.public.port' "$meta")
   encoded_name=$(uri_encode "$name")
   insecure=$(jq -r 'if .tls.insecure then 1 else 0 end' "$meta")
   tls_server_name=$(jq -r '.tls.server_name // .public.address' "$meta")
@@ -186,22 +186,22 @@ protocol_share_uri() {
     hysteria2)
       password=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
       obfs=$(uri_encode "$(jq -r '.obfs.password' "$meta")")
-      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s&obfs=salamander&obfs-password=%s#%s\n' "$password" "$address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$obfs" "$encoded_name"
+      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s&obfs=salamander&obfs-password=%s#%s\n' "$password" "$uri_address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$obfs" "$encoded_name"
       ;;
     tuic)
       uuid=$(jq -r '.credentials.uuid' "$meta")
       password=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
-      printf 'tuic://%s:%s@%s:%s?congestion_control=cubic&udp_relay_mode=native&sni=%s&allow_insecure=%s#%s\n' "$uuid" "$password" "$address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$encoded_name"
+      printf 'tuic://%s:%s@%s:%s?congestion_control=cubic&udp_relay_mode=native&sni=%s&allow_insecure=%s#%s\n' "$uuid" "$password" "$uri_address" "$port" "$(uri_encode "$tls_server_name")" "$insecure" "$encoded_name"
       ;;
     trojan|vless-tls|vmess)
       transport=$(jq -r '.transport.type' "$meta"); path=$(jq -r '.transport.path' "$meta"); host=$(jq -r '.transport.host' "$meta"); tls_mode=$(jq -r '.tls.mode' "$meta")
       security=none; [ "$tls_mode" = none ] || security=tls
       if [ "$protocol" = trojan ]; then
         credential=$(uri_encode "$(jq -r '.credentials.password' "$meta")")
-        printf 'trojan://%s@%s:%s?security=%s&sni=%s&type=%s&host=%s&path=%s#%s\n' "$credential" "$address" "$port" "$security" "$(uri_encode "$host")" "$transport" "$(uri_encode "$host")" "$(uri_encode "$path")" "$encoded_name"
+        printf 'trojan://%s@%s:%s?security=%s&sni=%s&type=%s&host=%s&path=%s#%s\n' "$credential" "$uri_address" "$port" "$security" "$(uri_encode "$host")" "$transport" "$(uri_encode "$host")" "$(uri_encode "$path")" "$encoded_name"
       elif [ "$protocol" = vless-tls ]; then
         credential=$(jq -r '.credentials.uuid' "$meta")
-        printf 'vless://%s@%s:%s?encryption=none&security=%s&sni=%s&type=%s&host=%s&path=%s#%s\n' "$credential" "$address" "$port" "$security" "$(uri_encode "$host")" "$transport" "$(uri_encode "$host")" "$(uri_encode "$path")" "$encoded_name"
+        printf 'vless://%s@%s:%s?encryption=none&security=%s&sni=%s&type=%s&host=%s&path=%s#%s\n' "$credential" "$uri_address" "$port" "$security" "$(uri_encode "$host")" "$transport" "$(uri_encode "$host")" "$(uri_encode "$path")" "$encoded_name"
       else
         uuid=$(jq -r '.credentials.uuid' "$meta")
         vmess_json=$(jq -nc --arg name "$name" --arg address "$address" --arg port "$port" --arg uuid "$uuid" --arg transport "$transport" --arg host "$host" --arg path "$path" --arg tls "$security" '{v:"2",ps:$name,add:$address,port:$port,id:$uuid,aid:"0",scy:"auto",net:$transport,type:"none",host:$host,path:$path,tls:(if $tls=="tls" then "tls" else "" end),sni:$host}')
