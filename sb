@@ -663,13 +663,20 @@ EOF
       menu_listen_address=${menu_listen_address:-::}
       printf '内部监听端口（服务商面板的目标端口）: '
       read -r menu_listen_port
-      printf '映射后的公网 IPv6 或域名（必填）: '
-      read -r menu_public_address
-      printf '映射后的公网端口（必填）: '
-      read -r menu_public_port
       [ -n "$menu_listen_port" ] || { warn 'NAT IPv6 需要内部监听端口'; return 1; }
-      [ -n "$menu_public_address" ] || { warn 'NAT IPv6 需要映射后的公网 IPv6 或域名'; return 1; }
-      [ -n "$menu_public_port" ] || { warn 'NAT IPv6 需要映射后的公网端口'; return 1; }
+      menu_detected_public_ipv6=
+      if [ -t 0 ]; then menu_detected_public_ipv6=$(detect_egress_public_ipv6 || true); fi
+      if [ -n "$menu_detected_public_ipv6" ]; then
+        printf '映射后的公网 IPv6 或域名 [%s]: ' "$menu_detected_public_ipv6"
+      else
+        printf '映射后的公网 IPv6 或域名（必填）: '
+      fi
+      read -r menu_public_address
+      menu_public_address=${menu_public_address:-$menu_detected_public_ipv6}
+      printf '映射后的公网端口 [%s]: ' "$menu_listen_port"
+      read -r menu_public_port
+      menu_public_port=${menu_public_port:-$menu_listen_port}
+      [ -n "$menu_public_address" ] || { warn '未能自动识别公网 IPv6，请手动填写映射后的公网 IPv6 或域名'; return 1; }
       ;;
     *)
       printf '内部监听端口（留空则使用默认端口）: '

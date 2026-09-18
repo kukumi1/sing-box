@@ -87,6 +87,11 @@ detect_public_ipv6() {
   ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1     | grep -vE '^(fd|fc|fe80:)' | head -n1
 }
 
+detect_egress_public_ipv6() {
+  command -v curl >/dev/null 2>&1 || return 1
+  curl -6 -fsS --connect-timeout 3 --max-time 8 https://api64.ipify.org 2>/dev/null
+}
+
 validate_host() {
   value=$(strip_ipv6_brackets "$1")
   case "$value" in *:*) is_ipv6 "$value"; return ;; esac
