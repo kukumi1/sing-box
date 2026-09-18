@@ -651,9 +651,10 @@ EOF
     ipv6-direct)
       menu_detected_ipv6=$(detect_public_ipv6 || true)
       [ -n "$menu_detected_ipv6" ] || { warn '未检测到可入站公网 IPv6；请改用 NAT IPv6 模式手动填写公网地址'; return 1; }
-      printf '检测到公网 IPv6：%s（直连模式监听 ::）\n' "$menu_detected_ipv6"
+      printf '检测到公网 IPv6：%s（直连模式将仅绑定此 IPv6，避免占用 IPv4 端口）\n' "$menu_detected_ipv6"
       printf '内部监听端口（留空则使用默认端口）: '
       read -r menu_listen_port
+      menu_listen_address=$menu_detected_ipv6
       menu_public_address=$menu_detected_ipv6
       menu_public_port=$menu_listen_port
       ;;
