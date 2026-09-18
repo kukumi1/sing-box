@@ -56,7 +56,7 @@ generate_node_metadata() {
         tls_mode=trusted
         insecure=false
       else
-        if is_ipv4 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
+        if is_ipv4 "$public_address" || is_ipv6 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
         openssl ecparam -genkey -name prime256v1 -out "$cert_stage_dir/key.pem"
         openssl req -new -x509 -key "$cert_stage_dir/key.pem" -sha256 -days 3650 \
           -out "$cert_stage_dir/cert.pem" -subj "/CN=$public_address" -addext "subjectAltName=$san"
@@ -172,6 +172,7 @@ node_share_uri() {
   protocol=$(jq -r '.protocol' "$meta")
   name=$(jq -r '.name' "$meta")
   address=$(jq -r '.public.address' "$meta")
+  uri_address=$(format_uri_host "$address")
   port=$(jq -r '.public.port' "$meta")
   case "$protocol" in
     anytls)
@@ -179,26 +180,26 @@ node_share_uri() {
       encoded_name=$(uri_encode "$name")
       insecure=$(jq -r 'if .tls.insecure then 1 else 0 end' "$meta")
       server_name=$(jq -r '.tls.server_name // .public.address' "$meta")
-      if is_ipv4 "$server_name"; then query="insecure=$insecure&fp=chrome"; else query="sni=$(uri_encode "$server_name")&insecure=$insecure&fp=chrome"; fi
-      printf 'anytls://%s@%s:%s?%s#%s\n' "$password" "$address" "$port" "$query" "$encoded_name"
+      if is_ipv4 "$server_name" || is_ipv6 "$server_name"; then query="insecure=$insecure&fp=chrome"; else query="sni=$(uri_encode "$server_name")&insecure=$insecure&fp=chrome"; fi
+      printf 'anytls://%s@%s:%s?%s#%s\n' "$password" "$uri_address" "$port" "$query" "$encoded_name"
       ;;
     ss2022)
       method=$(jq -r '.credentials.method' "$meta")
       password=$(jq -r '.credentials.password' "$meta")
       userinfo=$(printf '%s:%s' "$method" "$password" | base64_url_no_padding)
-      printf 'ss://%s@%s:%s#%s\n' "$userinfo" "$address" "$port" "$(uri_encode "$name")"
+      printf 'ss://%s@%s:%s#%s\n' "$userinfo" "$uri_address" "$port" "$(uri_encode "$name")"
       ;;
     vless-reality)
       uuid=$(jq -r '.credentials.uuid' "$meta")
       server=$(jq -r '.reality.server' "$meta")
       public_key=$(jq -r '.reality.public_key' "$meta")
       short_id=$(jq -r '.reality.short_id' "$meta")
-      printf 'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#%s\n' "$uuid" "$address" "$port" "$(uri_encode "$server")" "$(uri_encode "$public_key")" "$(uri_encode "$short_id")" "$(uri_encode "$name")"
+      printf 'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#%s\n' "$uuid" "$uri_address" "$port" "$(uri_encode "$server")" "$(uri_encode "$public_key")" "$(uri_encode "$short_id")" "$(uri_encode "$name")"
       ;;
     socks5)
       username=$(jq -r '.credentials.username' "$meta")
       password=$(jq -r '.credentials.password' "$meta")
-      printf 'socks5://%s:%s@%s:%s#%s\n' "$(uri_encode "$username")" "$(uri_encode "$password")" "$address" "$port" "$(uri_encode "$name")"
+      printf 'socks5://%s:%s@%s:%s#%s\n' "$(uri_encode "$username")" "$(uri_encode "$password")" "$uri_address" "$port" "$(uri_encode "$name")"
       ;;
   esac
 }

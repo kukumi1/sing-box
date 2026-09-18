@@ -44,9 +44,10 @@ grep -F 'sb · sing-box 管理器' "$main_output" >/dev/null
 grep -F '【节点管理】' "$main_output" >/dev/null
 grep -F '【服务与维护】' "$main_output" >/dev/null
 grep -F '【网络工具】' "$main_output" >/dev/null
+grep -F 'IPv6/NAT 节点' "$main_output" >/dev/null
 grep -F '[18] 删除全部节点' "$main_output" >/dev/null
 grep -F '[19] 卸载管理器' "$main_output" >/dev/null
-grep -F '请选择操作 [0-19]:' "$main_output" >/dev/null
+grep -F '请选择操作 [0-20]:' "$main_output" >/dev/null
 if grep -q "$(printf '\033')" "$main_output"; then
   printf '%s\n' 'Expected non-interactive menu output without ANSI escape codes.' >&2
   exit 1

@@ -64,6 +64,22 @@ sh install.sh --server-address 你的公网IP或域名
 ```
 
 如果当前终端已经是 `root`，不要加 `sudo`。自动检测失败或需要指定入口域名时，可使用 `--server-address IP或域名`。菜单中的节点操作会自动列出所有节点，可直接输入序号选择，无需记住节点名称。安装器会在修改软件包前检查已有的非托管配置；只有确认自动备份无误后才应使用 `--force`。
+
+## IPv6、双栈与 NAT IPv6
+
+IPv4 仍是默认模式。新增节点时可选择：
+
+- `sb ipv6`：打开 IPv6/NAT 菜单并检测地址、路由。
+- `sb add ss2022 --address-family ipv6`：监听 `::` 并生成 IPv6 节点。
+- `sb add ss2022 --address-family dual`：在支持 `bindv6only=0` 的主机通过 `::` 同时接收 IPv4 与 IPv6。
+- NAT 机器必须显式传入 `--public-address` 和 `--public-port`，其值是服务商面板映射后的公网入口；内部端口继续使用 `--listen-port`。
+
+IPv6 分享链接会自动使用 `[IPv6]:端口`。脚本不会将 `fd00::/8`、`fc00::/7` 或 `fe80::/10` 当作公网 IPv6，也不会自动修改服务商 NAT 面板或关闭 UDP。
+
+```sh
+sb add ss2022 --name nat-v6 --address-family ipv6   --listen-port 22558 --public-address 2400:db8::10 --public-port 22558   --ss-method 2022-blake3-aes-256-gcm
+```
+
 ## NAT 机器示例
 
 假设服务商端口映射为：

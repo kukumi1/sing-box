@@ -51,8 +51,45 @@ is_ipv4() {
   '
 }
 
-validate_host() {
+strip_ipv6_brackets() {
   value=$1
+  case "$value" in [\[*\]]) printf '%s' "${value#\[}" | sed 's/\]$//' ;; *) printf '%s' "$value" ;; esac
+}
+
+is_ipv6() {
+  value=$(strip_ipv6_brackets "$1")
+  case "$value" in *:*) ;; *) return 1 ;; esac
+  printf '%s' "$value" | awk -F: '
+    BEGIN { valid=1; double=0; total=0 }
+    { for (i=1; i<=NF; i++) {
+        if ($i == "") { if (i==1 || i==NF || double) continue; double=1; continue }
+        if ($i ~ /[^0-9A-Fa-f]/ || length($i)>4) valid=0
+        total++
+      }
+      if (!double && total != 8) valid=0
+      if (double && total >= 8) valid=0
+      if (valid) exit 0; exit 1
+    }'
+}
+
+validate_listen_address() {
+  value=$(strip_ipv6_brackets "$1")
+  [ "$value" = 0.0.0.0 ] || [ "$value" = :: ] || is_ipv4 "$value" || is_ipv6 "$value"
+}
+
+format_uri_host() {
+  value=$(strip_ipv6_brackets "$1")
+  if is_ipv6 "$value"; then printf '[%s]' "$value"; else printf '%s' "$value"; fi
+}
+
+detect_public_ipv6() {
+  command -v ip >/dev/null 2>&1 || return 1
+  ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1     | grep -vE '^(fd|fc|fe80:)' | head -n1
+}
+
+validate_host() {
+  value=$(strip_ipv6_brackets "$1")
+  case "$value" in *:*) is_ipv6 "$value"; return ;; esac
   case "$value" in ''|*[!A-Za-z0-9.-]*|.*|*.|*..*) return 1 ;; esac
   if printf '%s' "$value" | grep -Eq '^[0-9.]+$'; then
     is_ipv4 "$value"

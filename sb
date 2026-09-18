@@ -121,7 +121,7 @@ ui_main_menu_view() {
   printf '  %s[14]%s 恢复备份      %s[15]%s 更新管理器    %s[16]%s 系统诊断\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '  %s[19]%s 卸载管理器\n' "$UI_RED" "$UI_RESET"
   ui_section 网络工具
-  printf '  %s[17]%s 动态端口转发\n' "$UI_GREEN" "$UI_RESET"
+  printf '  %s[17]%s 动态端口转发      %s[20]%s IPv6/NAT 节点\n' "$UI_GREEN" "$UI_RESET" "$UI_GREEN" "$UI_RESET"
   printf '\n%s  ─────────────────────────────────────────────%s\n' "$UI_MUTED" "$UI_RESET"
   printf '  %s[0]%s 退出管理器\n\n' "$UI_YELLOW" "$UI_RESET"
 }
@@ -143,7 +143,7 @@ usage() {
 Usage: sb COMMAND [arguments]
 
 Node commands:
-  sb add <anytls|ss2022|vless-reality|socks5> [options]
+  sb add <anytls|ss2022|vless-reality|socks5|hysteria2|tuic|trojan|vmess|vless-tls> [options]
   sb change NAME [--listen-port PORT] [--public-address HOST] [--public-port PORT] [--tls-sni HOST]
   sb list
   sb info NAME
@@ -167,6 +167,7 @@ Port forwarding:
                          [--target-port PORT] [--protocol tcp|udp|both]
   sb forward list | sync | enable NAME | disable NAME | delete NAME
   sb forward delete-all [--yes]
+  sb ipv6 [detect|check]
 
 NAT example:
   sb add anytls --name tw --listen-port 30009 \
@@ -247,6 +248,8 @@ command_add() {
 
   name=
   listen_address=0.0.0.0
+  address_family=ipv4
+  public_address_explicit=0
   listen_port=
   public_address=$(manager_server_address)
   public_port=
@@ -270,8 +273,9 @@ command_add() {
     case "$1" in
       --name) name=$2; shift 2 ;;
       --listen-address|--listen) listen_address=$2; shift 2 ;;
+      --address-family) address_family=$2; shift 2 ;;
       --listen-port|--port) listen_port=$2; shift 2 ;;
-      --public-address|--server-address) public_address=$2; shift 2 ;;
+      --public-address|--server-address) public_address=$2; public_address_explicit=1; shift 2 ;;
       --public-port) public_port=$2; shift 2 ;;
       --username) username=$2; shift 2 ;;
       --password) password=$2; shift 2 ;;
@@ -292,6 +296,16 @@ command_add() {
   done
 
   [ -n "$listen_port" ] || listen_port=$(protocol_default_port_all "$protocol")
+  case "$address_family" in
+    ipv4) [ "$listen_address" = 0.0.0.0 ] || is_ipv4 "$listen_address" || die 'IPv4 模式需要 IPv4 listen address' ;;
+    ipv6) [ "$listen_address" = 0.0.0.0 ] && listen_address=::; validate_listen_address "$listen_address" || die 'invalid IPv6 listen address' ;;
+    dual) [ "$listen_address" = 0.0.0.0 ] && listen_address=::; validate_listen_address "$listen_address" || die 'invalid dual-stack listen address'; [ ! -r /proc/sys/net/ipv6/bindv6only ] || [ "$(cat /proc/sys/net/ipv6/bindv6only)" = 0 ] || die 'dual-stack requires bindv6only=0' ;;
+    *) die 'address-family must be ipv4, ipv6, or dual' ;;
+  esac
+  if [ "$address_family" != ipv4 ] && [ "$public_address_explicit" -eq 0 ]; then
+    public_address=$(detect_public_ipv6 || true)
+    [ -n "$public_address" ] || die '未检测到公网 IPv6，请使用 --public-address 手动指定'
+  fi
   [ -n "$host" ] || host=$public_address
   [ -n "$public_port" ] || public_port=$listen_port
   [ -n "$name" ] || name="$protocol-$listen_port"
@@ -303,7 +317,7 @@ command_add() {
   validate_name "$name" || die 'invalid node name'
   validate_host "$public_address" || die 'invalid public address'
   validate_host "$tls_sni" || die 'invalid TLS SNI'
-  is_ipv4 "$listen_address" || die 'listen address must be IPv4'
+  validate_listen_address "$listen_address" || die 'invalid listen address'
   validate_port "$listen_port" || die 'invalid listen port'
   validate_port "$public_port" || die 'invalid public port'
   validate_port "$reality_port" || die 'invalid REALITY port'
@@ -319,6 +333,7 @@ command_add() {
     "$public_address" "$public_port" "$username" "$password" "$ss_method" \
     "$reality_server" "$reality_port" "$tls_sni" "$cert_source" "$key_source" "$cert_stage" \
     "$transport" "$path" "$host" "$tls_mode" "$acme_email" "$obfs_password"
+  jq --arg family "$address_family" '.address_family=$family' "$meta" >"$meta.tmp"; mv "$meta.tmp" "$meta"
   protocol_render "$meta" "$config"
   commit_node_change "$name" "$config" "$meta" "$cert_stage" add
   rm -rf "$work"
@@ -473,7 +488,7 @@ cert_stage=
   if [ "$protocol" = anytls ] && [ "$tls_mode" = self-signed ] && [ "$old_public_address" != "$public_address" ]; then
     cert_stage="$work/certs"
     install -d -m 0700 "$cert_stage"
-    if is_ipv4 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
+    if is_ipv4 "$public_address" || is_ipv6 "$public_address"; then san="IP:$public_address"; else san="DNS:$public_address"; fi
     openssl ecparam -genkey -name prime256v1 -out "$cert_stage/key.pem"
     openssl req -new -x509 -key "$cert_stage/key.pem" -sha256 -days 3650 \
       -out "$cert_stage/cert.pem" -subj "/CN=$public_address" -addext "subjectAltName=$san"
@@ -603,6 +618,7 @@ EOF
 }
 
 interactive_add_node() {
+  menu_address_family=${1:-ipv4}
   cat <<'EOF'
 
 请选择节点协议：
@@ -670,6 +686,7 @@ EOF
   [ -z "$menu_password" ] || set -- "$@" --password "$menu_password"
   [ -z "$menu_ss_method" ] || set -- "$@" --ss-method "$menu_ss_method"
   [ -z "$menu_tls_sni" ] || set -- "$@" --tls-sni "$menu_tls_sni"
+  [ "$menu_address_family" = ipv4 ] || set -- "$@" --address-family "$menu_address_family"
   command_add "$@"
 }
 
@@ -791,10 +808,35 @@ interactive_forward_menu() {
   done
 }
 
+command_ipv6() {
+  case "${1:-detect}" in
+    detect) printf '全局公网 IPv6: '; detect_public_ipv6 || printf '未检测到'; printf '\n'; ip -6 route show default 2>/dev/null || true ;;
+    check) ip -6 addr show scope global; ip -6 route show; ;;
+    *) die 'usage: sb ipv6 [detect|check]' ;;
+  esac
+}
+
+command_ipv6_menu() {
+  while :; do
+    ui_clear; ui_print_header; ui_section IPv6/NAT 节点
+    printf '  [1] IPv6 直连节点\n  [2] NAT IPv6 节点\n  [3] 双栈节点\n  [4] IPv6 地址检测\n  [5] IPv6 路由检查\n  [0] 返回\n'
+    printf '请选择操作 [0-5]: '; read -r ipv6_choice
+    case "$ipv6_choice" in
+      1) interactive_add_node ipv6 ;;
+      2) interactive_add_node ipv6 ;;
+      3) interactive_add_node dual ;;
+      4) command_ipv6 detect ;;
+      5) command_ipv6 check ;;
+      0) return 0;; *) warn '无效选项';;
+    esac
+    ui_pause
+  done
+}
+
 interactive_menu() {
   while :; do
     ui_main_menu_view
-    printf '%s请选择操作 [0-19]: %s' "$UI_YELLOW" "$UI_RESET"
+    printf '%s请选择操作 [0-20]: %s' "$UI_YELLOW" "$UI_RESET"
     read -r choice
     case "$choice" in
       1) interactive_add_node ;;
@@ -849,6 +891,7 @@ interactive_menu() {
       15) command_update manager ;;
       16) command_doctor ;;
       17) interactive_forward_menu; continue ;;
+      20) command_ipv6_menu; continue ;;
       18) command_delete_all ;;
       19) if interactive_uninstall; then return 0; fi ;;
       0) return 0 ;;
@@ -877,6 +920,7 @@ shift
 case "$command" in
   add) command_add "$@" ;;
   forward) command_forward "$@" ;;
+  ipv6) command_ipv6 "$@" ;;
   migrate) command_migrate "$@" ;;
   enable) command_enable "$@" ;;
   disable) command_disable "$@" ;;
