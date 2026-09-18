@@ -618,7 +618,8 @@ EOF
 }
 
 interactive_add_node() {
-  menu_address_family=${1:-ipv4}
+  menu_mode=${1:-ipv4}
+  case "$menu_mode" in ipv4) menu_address_family=ipv4;; ipv6-direct|ipv6-nat) menu_address_family=ipv6;; dual) menu_address_family=dual;; *) die 'invalid interactive address mode';; esac
   cat <<'EOF'
 
 请选择节点协议：
@@ -636,49 +637,59 @@ EOF
   printf '请输入协议编号: '
   read -r protocol_choice
   case "$protocol_choice" in
-    1) menu_protocol=anytls ;;
-    2) menu_protocol=ss2022 ;;
-    3) menu_protocol=vless-reality ;;
-    4) menu_protocol=socks5 ;;
-    5) menu_protocol=hysteria2 ;;
-    6) menu_protocol=tuic ;;
-    7) menu_protocol=trojan ;;
-    8) menu_protocol=vmess ;;
-    9) menu_protocol=vless-tls ;;
-    0) return 0 ;;
-    *) warn '无效的协议编号'; return 1 ;;
+    1) menu_protocol=anytls ;; 2) menu_protocol=ss2022 ;; 3) menu_protocol=vless-reality ;;
+    4) menu_protocol=socks5 ;; 5) menu_protocol=hysteria2 ;; 6) menu_protocol=tuic ;;
+    7) menu_protocol=trojan ;; 8) menu_protocol=vmess ;; 9) menu_protocol=vless-tls ;;
+    0) return 0 ;; *) warn '无效的协议编号'; return 1 ;;
   esac
-
   printf '节点名称（留空则自动生成）: '
   read -r menu_name
-  printf '内部监听端口（留空则使用默认端口）: '
-  read -r menu_listen_port
-  printf '客户端连接的公网 IP 或域名（留空使用安装时设置）: '
-  read -r menu_public_address
-  printf 'NAT 映射后的公网端口（留空则与内部端口相同）: '
-  read -r menu_public_port
-  menu_username=
-  menu_password=
-  menu_ss_method=
-  menu_tls_sni=
-  if [ "$menu_protocol" = ss2022 ]; then
-    interactive_select_ss2022_method default || return 1
-  fi
-  if [ "$menu_protocol" = socks5 ]; then
-    printf 'SOCKS5 用户名（留空使用 default）: '
-    read -r menu_username
-    printf 'SOCKS5 密码（留空自动生成）: '
-    read -r menu_password
-  fi
-  case "$menu_protocol" in
-    anytls|hysteria2|tuic)
-      printf 'TLS SNI（留空则跟随公网 IP 或域名）: '
-      read -r menu_tls_sni
+  menu_listen_address=
+  menu_public_address=
+  menu_public_port=
+  case "$menu_mode" in
+    ipv6-direct)
+      menu_detected_ipv6=$(detect_public_ipv6 || true)
+      [ -n "$menu_detected_ipv6" ] || { warn '未检测到可入站公网 IPv6；请改用 NAT IPv6 模式手动填写公网地址'; return 1; }
+      printf '检测到公网 IPv6：%s（直连模式监听 ::）\n' "$menu_detected_ipv6"
+      printf '内部监听端口（留空则使用默认端口）: '
+      read -r menu_listen_port
+      menu_public_address=$menu_detected_ipv6
+      menu_public_port=$menu_listen_port
+      ;;
+    ipv6-nat)
+      printf '内部 IPv6 监听地址 [::]: '
+      read -r menu_listen_address
+      menu_listen_address=${menu_listen_address:-::}
+      printf '内部监听端口（服务商面板的目标端口）: '
+      read -r menu_listen_port
+      printf '映射后的公网 IPv6 或域名（必填）: '
+      read -r menu_public_address
+      printf '映射后的公网端口（必填）: '
+      read -r menu_public_port
+      [ -n "$menu_listen_port" ] || { warn 'NAT IPv6 需要内部监听端口'; return 1; }
+      [ -n "$menu_public_address" ] || { warn 'NAT IPv6 需要映射后的公网 IPv6 或域名'; return 1; }
+      [ -n "$menu_public_port" ] || { warn 'NAT IPv6 需要映射后的公网端口'; return 1; }
+      ;;
+    *)
+      printf '内部监听端口（留空则使用默认端口）: '
+      read -r menu_listen_port
+      printf '客户端连接的公网 IP 或域名（留空使用安装时设置）: '
+      read -r menu_public_address
+      printf 'NAT 映射后的公网端口（留空则与内部端口相同）: '
+      read -r menu_public_port
       ;;
   esac
-
+  menu_username=; menu_password=; menu_ss_method=; menu_tls_sni=
+  if [ "$menu_protocol" = ss2022 ]; then interactive_select_ss2022_method default || return 1; fi
+  if [ "$menu_protocol" = socks5 ]; then
+    printf 'SOCKS5 用户名（留空使用 default）: '; read -r menu_username
+    printf 'SOCKS5 密码（留空自动生成）: '; read -r menu_password
+  fi
+  case "$menu_protocol" in anytls|hysteria2|tuic) printf 'TLS SNI（留空则跟随公网 IP 或域名）: '; read -r menu_tls_sni;; esac
   set -- "$menu_protocol"
   [ -z "$menu_name" ] || set -- "$@" --name "$menu_name"
+  [ -z "$menu_listen_address" ] || set -- "$@" --listen-address "$menu_listen_address"
   [ -z "$menu_listen_port" ] || set -- "$@" --listen-port "$menu_listen_port"
   [ -z "$menu_public_address" ] || set -- "$@" --public-address "$menu_public_address"
   [ -z "$menu_public_port" ] || set -- "$@" --public-port "$menu_public_port"
@@ -822,8 +833,8 @@ command_ipv6_menu() {
     printf '  [1] IPv6 直连节点\n  [2] NAT IPv6 节点\n  [3] 双栈节点\n  [4] IPv6 地址检测\n  [5] IPv6 路由检查\n  [0] 返回\n'
     printf '请选择操作 [0-5]: '; read -r ipv6_choice
     case "$ipv6_choice" in
-      1) interactive_add_node ipv6 ;;
-      2) interactive_add_node ipv6 ;;
+      1) interactive_add_node ipv6-direct ;;
+      2) interactive_add_node ipv6-nat ;;
       3) interactive_add_node dual ;;
       4) command_ipv6 detect ;;
       5) command_ipv6 check ;;

@@ -69,7 +69,7 @@ sh install.sh --server-address 你的公网IP或域名
 
 IPv4 仍是默认模式。新增节点时可选择：
 
-- `sb ipv6`：打开 IPv6/NAT 菜单并检测地址、路由。
+- `sb ipv6`：打开 IPv6/NAT 菜单并检测地址、路由。直连模式自动使用检测到的公网 IPv6，监听 `::`，公网端口与内部端口相同；NAT 模式必须分别填写内部监听地址/端口与面板映射后的公网 IPv6/域名和公网端口。
 - `sb add ss2022 --address-family ipv6`：监听 `::` 并生成 IPv6 节点。
 - `sb add ss2022 --address-family dual`：在支持 `bindv6only=0` 的主机通过 `::` 同时接收 IPv4 与 IPv6。
 - NAT 机器必须显式传入 `--public-address` 和 `--public-port`，其值是服务商面板映射后的公网入口；内部端口继续使用 `--listen-port`。
