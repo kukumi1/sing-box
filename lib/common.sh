@@ -92,6 +92,18 @@ detect_egress_public_ipv6() {
   curl -6 -fsS --connect-timeout 3 --max-time 8 https://api64.ipify.org 2>/dev/null
 }
 
+detect_public_ipv4() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -4 -fsS --connect-timeout 3 --max-time 8 https://api.ipify.org 2>/dev/null && return 0
+  fi
+  command -v ip >/dev/null 2>&1 || return 1
+  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -vE '^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' | head -n1
+}
+
+is_documentation_ipv4() {
+  case "$1" in 192.0.2.*|198.51.100.*|203.0.113.*) return 0 ;; *) return 1 ;; esac
+}
+
 validate_host() {
   value=$(strip_ipv6_brackets "$1")
   case "$value" in *:*) is_ipv6 "$value"; return ;; esac
@@ -140,7 +152,25 @@ acquire_lock() {
 }
 
 manager_server_address() {
-  jq -er '.server_address' "$SB_MANAGER_CONFIG"
+  stored=$(jq -er '.server_address' "$SB_MANAGER_CONFIG")
+  # A literal IP is a bootstrap hint, not a permanent identity. Refresh it
+  # when the VPS address changes; preserve user-managed domains.
+  case "$stored" in
+    192.0.2.*|198.51.100.*|203.0.113.*) printf '%s\n' "$stored"; return 0 ;;
+    *:*) current=$(detect_public_ipv6 || true) ;;
+    [0-9]*.[0-9]*) current=$(detect_public_ipv4 || true) ;;
+    *) printf '%s\n' "$stored"; return 0 ;;
+  esac
+  if [ -n "${current:-}" ] && [ "$current" != "$stored" ] && validate_host "$current"; then
+    if jq --arg address "$current" '.server_address=$address | .server_address_updated_at=(now|todateiso8601)' "$SB_MANAGER_CONFIG" >"$SB_MANAGER_CONFIG.tmp" 2>/dev/null; then
+      mv "$SB_MANAGER_CONFIG.tmp" "$SB_MANAGER_CONFIG"
+    else
+      rm -f "$SB_MANAGER_CONFIG.tmp"
+    fi
+    printf '%s\n' "$current"
+  else
+    printf '%s\n' "$stored"
+  fi
 }
 
 port_in_metadata() (
